@@ -1,6 +1,6 @@
 [workspace]
 members = [
-  "crates/jankurai",
+  "crates/jankurai-audit-analyzers",
 ]
 resolver = "2"
 
