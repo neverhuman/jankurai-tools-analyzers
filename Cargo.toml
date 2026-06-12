@@ -1,0 +1,5 @@
+[workspace]
+members = [
+  "crates/jankurai-audit-analyzers",
+]
+resolver = "2"
