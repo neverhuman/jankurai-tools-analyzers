@@ -127,6 +127,7 @@ fn excluded(file: &FileInfo) -> bool {
         || lower.ends_with(".test.ts")
         || lower.ends_with(".spec.ts")
         || lower.starts_with("crates/jankurai/src/audit/zyal/")
+        || lower.starts_with("crates/jankurai-audit-analyzers/src/audit/zyal/")
 }
 
 fn is_candidate(file: &FileInfo) -> bool {
