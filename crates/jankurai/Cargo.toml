@@ -27,4 +27,5 @@ toml = "0.9"
 walkdir = "2.5"
 
 [dev-dependencies]
+proptest = "1"
 tempfile = "3.23"

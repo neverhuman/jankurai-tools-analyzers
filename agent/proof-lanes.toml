@@ -1,0 +1,80 @@
+# Live minimal lane set for jankurai-tools-analyzers. Every lane command runs in
+# this repo alone and is exposed both locally (Justfile) and in CI (ops/ci/*.sh).
+
+[[lane]]
+name = "required"
+command = "bash scripts/ci-local.sh required"
+purpose = "the lightweight gate that must pass on every push (cargo metadata resolves)"
+command_id = "lane.required"
+kind = "validation"
+cost = 3
+rules_covered = ["HLT-003-OWNERLESS-PATH", "HLT-004-UNMAPPED-PROOF"]
+required_artifacts = []
+timeout_seconds = 600
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "fast"
+command = "just fast"
+purpose = "deterministic fast lane: cargo check + nextest, the narrowest proof loop for agent iteration"
+command_id = "lane.fast"
+kind = "validation"
+cost = 5
+rules_covered = ["HLT-001-DEAD-MARKER", "HLT-003-OWNERLESS-PATH", "HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = []
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "security"
+command = "just security"
+purpose = "secret scanning (gitleaks) plus dependency vulnerability scanning (cargo audit)"
+command_id = "lane.security"
+kind = "security"
+cost = 20
+rules_covered = ["HLT-009-GENERATED-SECURITY", "HLT-010-SECRET-SPRAWL", "HLT-016-SUPPLY-CHAIN-DRIFT", "HLT-020-CI-HARDENING-GAP"]
+required_artifacts = []
+timeout_seconds = 1800
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "audit"
+command = "just audit"
+purpose = "write .jankurai/repo-score.json and .jankurai/repo-score.md from the jankurai self-audit"
+command_id = "lane.audit"
+kind = "audit"
+cost = 10
+rules_covered = ["HLT-001-DEAD-MARKER", "HLT-003-OWNERLESS-PATH", "HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = [".jankurai/repo-score.json", ".jankurai/repo-score.md"]
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "coverage-audit"
+command = "cargo run -p jankurai-audit-analyzers -- coverage audit . --config agent/coverage-sources.toml"
+purpose = "parse deterministic coverage and proof-gap artifacts without running external tools"
+command_id = "lane.coverage-audit"
+kind = "analysis"
+cost = 8
+rules_covered = ["HLT-004-UNMAPPED-PROOF", "HLT-008-FALSE-GREEN-RISK"]
+required_artifacts = []
+timeout_seconds = 900
+requires_network = false
+destructive = false
+
+[[lane]]
+name = "full"
+command = "just check"
+purpose = "run format, lint, fast lane, security, and the final self-audit"
+command_id = "lane.full"
+kind = "release"
+cost = 50
+supersedes = ["required", "fast", "security", "audit"]
+required_artifacts = [".jankurai/repo-score.json", ".jankurai/repo-score.md"]
+timeout_seconds = 3600
+requires_network = false
+destructive = false

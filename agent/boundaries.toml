@@ -1,0 +1,24 @@
+# Boundary manifest for jankurai-tools-analyzers.
+# This is a single-purpose Rust workspace: the jankurai audit analyzer suite.
+# Only the Rust domain block applies here; web, database, queue, and Python
+# surfaces are not part of this repo. See docs/boundaries.md for prose.
+
+[stack]
+id = "rust-ts-vite-react-postgres-bounded-python"
+version = "0.5.0"
+
+[rust]
+domain_paths = ["crates/jankurai/src/domain"]
+forbidden_domain_imports = [
+  "std::fs",
+  "std::env",
+  "std::net",
+  "std::time::SystemTime",
+  "rand::",
+  "sqlx::",
+  "diesel::",
+  "reqwest::",
+  "rdkafka::",
+  "tracing::",
+  "log::"
+]

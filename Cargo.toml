@@ -1,5 +1,14 @@
 [workspace]
 members = [
-  "crates/jankurai-audit-analyzers",
+  "crates/jankurai",
 ]
 resolver = "2"
+
+# DEV-ONLY local patch (uncommitted): build against the sibling kernel working
+# dir instead of the not-yet-published GitHub tag. Mirrors core's dev patch.
+# Must NOT be committed (validate-family.sh forbids path deps in committed manifests).
+[patch."https://github.com/neverhuman/jankurai-tools-kernel.git"]
+jankurai-audit-kernel = { path = "../jankurai-tools-kernel/crates/jankurai-audit-kernel" }
+
+[patch."https://github.com/neverhuman/jankurai-tools-dedup.git"]
+jankurai-audit-dedup = { path = "../jankurai-tools-dedup/crates/jankurai-audit-dedup" }
