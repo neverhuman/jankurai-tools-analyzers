@@ -1,5 +1,8 @@
 # jankurai-tools-analyzers
 
+[![CI](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml)
+[![jankurai audit](https://img.shields.io/badge/jankurai_audit-self--hosted-blue.svg)](.github/workflows/ci.yml)
+
 Dimension analyzers and scoring suite for the **jankurai** audit standard. This
 repository is one member of the Jankurai split family; read [`SPLIT.md`](SPLIT.md)
 for the family contract and [`AGENTS.md`](AGENTS.md) for agent routing rules.
@@ -32,7 +35,7 @@ integration runs the same lanes under
 
 | Path | Role |
 | --- | --- |
-| `crates/jankurai` | Rust analyzer + scoring crate |
+| `crates/jankurai-audit-analyzers` | Rust analyzer + scoring crate |
 | `agent/` | machine-readable owner, test, boundary, and proof maps |
 | `docs/` | architecture, testing, boundaries, release, and exception docs |
 | `ops/` | pinned CI script entrypoints |
