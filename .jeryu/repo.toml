@@ -1,0 +1,12 @@
+repo = "root/jankurai-tools-analyzers"
+default_branch = "main"
+
+[shadow_main]
+enabled = true
+remote_url = "git@github.com:neverhuman/jankurai-tools-analyzers.git"
+refs = ["refs/heads/main"]
+
+[tag_mirror]
+enabled = true
+remote_url = "git@github.com:neverhuman/jankurai-tools-analyzers.git"
+tag_pattern = "jankurai-tools-analyzers-v*"
