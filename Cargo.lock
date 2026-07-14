@@ -394,7 +394,7 @@ dependencies = [
 [[package]]
 name = "jankurai-audit-dedup"
 version = "0.1.0"
-source = "git+https://github.com/neverhuman/jankurai-tools-dedup.git?tag=jankurai-tools-dedup-v1.7.0-split.1#a06d75392ee39352ea564563dc2058f78af466f0"
+source = "git+https://github.com/neverhuman/jankurai-tools-dedup.git?tag=jankurai-tools-dedup-v1.7.0-split.2#06186a1166a1df03d8bd460c34502bb9eb907eb8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -409,7 +409,7 @@ dependencies = [
 [[package]]
 name = "jankurai-audit-kernel"
 version = "0.1.0"
-source = "git+https://github.com/neverhuman/jankurai-tools-kernel.git?tag=jankurai-tools-kernel-v1.7.0-split.0#4bde9e00df5e699dd49d089c7644f3b5342d0945"
+source = "git+https://github.com/neverhuman/jankurai-tools-kernel.git?tag=jankurai-tools-kernel-v1.7.0-split.1#92511486b87518bad58b04caff3e772c9c72906d"
 dependencies = [
  "aho-corasick",
  "anyhow",
