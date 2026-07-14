@@ -7,9 +7,12 @@ pub fn analyze(ctx: &AuditContext) -> DimensionResult {
     let mut evidence = vec![];
     let mut notes = vec![];
     let files = product_files(ctx);
-    if files.is_empty()
-        && !has_prefix(ctx, "db")
-        && !has_prefix(ctx, "migrations")
+    let wrong_layer_db = scan::wrong_layer_db_hits(ctx);
+    let has_db_surface = has_prefix(ctx, "db")
+        || has_prefix(ctx, "migrations")
+        || files.iter().any(|file| file.suffix == ".sql")
+        || !wrong_layer_db.is_empty();
+    if !has_db_surface
         && ctx
             .all_files
             .iter()
@@ -86,7 +89,6 @@ pub fn analyze(ctx: &AuditContext) -> DimensionResult {
         score += 10;
         evidence.push("data access appears compartmentalized".into());
     }
-    let wrong_layer_db = scan::wrong_layer_db_hits(ctx);
     if !wrong_layer_db.is_empty() {
         score -= 20;
         evidence.push(format!(
