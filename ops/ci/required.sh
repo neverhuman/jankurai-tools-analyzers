@@ -5,5 +5,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 
+log "required lane: governed Jankurai 1.6.11 identity"
+require_governed_jankurai
+
 log "required lane: cargo metadata"
-cargo metadata --no-deps --format-version 1 >/dev/null
+cargo metadata --locked --no-deps --format-version 1 >/dev/null

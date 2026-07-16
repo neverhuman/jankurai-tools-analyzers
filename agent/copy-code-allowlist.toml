@@ -9,7 +9,7 @@
 # classes still appear in the report under `suppressed.by = "allowlist"` for
 # full visibility.
 #
-# Run `jankurai copy-code rank` to get fingerprints for new entries.
+# Run `bash ops/ci/governed-jankurai copy-code rank` for new fingerprints.
 #
 # Example:
 # [[entries]]

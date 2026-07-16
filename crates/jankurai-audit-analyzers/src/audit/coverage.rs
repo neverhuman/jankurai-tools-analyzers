@@ -1,11 +1,11 @@
+use anyhow::{bail, Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use jankurai_audit_kernel::audit::finding_builder::{
     confidence_for_severity, finding_fingerprint, hardness_for_severity, rerun_command_for_lane,
 };
 use jankurai_audit_kernel::audit::rules;
 use jankurai_audit_kernel::model::{CoverageEvidenceSummary, Finding};
 use jankurai_audit_kernel::validation::{self, ArtifactSchema};
-use anyhow::{bail, Context, Result};
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -741,7 +741,7 @@ pub fn load_score_ingest(root: &Path) -> CoverageScoreIngest {
                     line: None,
                     message: "coverage evidence lane is configured but has not been run".into(),
                     evidence: vec![format!("{DEFAULT_CONFIG_PATH} exists")],
-                    repair: "run `cargo run -p jankurai -- coverage audit . --config agent/coverage-sources.toml --json target/jankurai/coverage/coverage-audit.json --md target/jankurai/coverage/coverage-audit.md`".into(),
+                    repair: "run `bash ops/ci/governed-jankurai coverage audit . --config agent/coverage-sources.toml --json target/jankurai/coverage/coverage-audit.json --md target/jankurai/coverage/coverage-audit.md`".into(),
                     owner: "agent".into(),
                     lane: "coverage-audit".into(),
                 }],
@@ -1957,7 +1957,7 @@ fn coverage_finding_to_score_finding(finding: &CoverageFinding) -> Finding {
         confidence: finding.confidence.max(confidence_for_severity(severity)),
         evidence_kind: evidence_kind.into(),
         rerun_command: if lane == "coverage-audit" {
-            "cargo run -p jankurai -- coverage audit . --config agent/coverage-sources.toml --json target/jankurai/coverage/coverage-audit.json --md target/jankurai/coverage/coverage-audit.md".into()
+            "bash ops/ci/governed-jankurai coverage audit . --config agent/coverage-sources.toml --json target/jankurai/coverage/coverage-audit.json --md target/jankurai/coverage/coverage-audit.md".into()
         } else {
             rerun_command_for_lane(Some(lane)).into()
         },

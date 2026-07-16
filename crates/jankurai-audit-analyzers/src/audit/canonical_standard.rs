@@ -184,7 +184,7 @@ pub fn detect_ci_gaps(ctx: &AuditContext) -> Vec<FindingHit> {
             anchor,
             "jankurai audit lane",
             "CI has no jankurai audit lane, so merges are not gated on a repository conformance score",
-            "add a jankurai audit lane (for example `bash ops/ci/audit.sh` or a `jankurai audit` step) to CI",
+            "add the governed Jankurai audit lane (`bash ops/ci/audit.sh`) to CI",
         ));
     }
     hits

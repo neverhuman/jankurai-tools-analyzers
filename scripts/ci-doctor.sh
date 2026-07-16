@@ -8,7 +8,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../ops/ci/lib.sh"
 log "ci-doctor: checking required tools"
 
 status=0
-for tool in cargo rustc cargo-nextest gitleaks cargo-audit jankurai; do
+for tool in cargo rustc cargo-nextest gitleaks cargo-audit; do
   if command -v "$tool" >/dev/null 2>&1; then
     log "ok: $tool ($(command -v "$tool"))"
   else
@@ -17,9 +17,15 @@ for tool in cargo rustc cargo-nextest gitleaks cargo-audit jankurai; do
   fi
 done
 
-log "pinned versions: rust=$RUST_TOOLCHAIN gitleaks=$GITLEAKS_VERSION cargo-audit=$CARGO_AUDIT_VERSION nextest=$NEXTEST_VERSION"
+if require_governed_jankurai; then
+  log "ok: governed Jankurai ($GOVERNED_JANKURAI_VERSION; $GOVERNED_JANKURAI_BINARY_SHA256)"
+else
+  status=1
+fi
+
+log "pinned versions: rust=$RUST_TOOLCHAIN gitleaks=$GITLEAKS_VERSION cargo-audit=$CARGO_AUDIT_VERSION nextest=$NEXTEST_VERSION jankurai=$GOVERNED_JANKURAI_VERSION"
 
 if [ "$status" -ne 0 ]; then
-  printf '[ci] environment does not match CI; install the tools above\n' >&2
+  printf '[ci] environment does not match the governed CI identity\n' >&2
 fi
 exit "$status"

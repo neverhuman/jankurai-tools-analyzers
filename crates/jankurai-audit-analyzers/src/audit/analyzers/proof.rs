@@ -1,6 +1,6 @@
 use crate::audit::analyzers;
-use jankurai_audit_kernel::audit::helpers::*;
 use crate::audit::proofbind_artifact;
+use jankurai_audit_kernel::audit::helpers::*;
 use jankurai_audit_kernel::model::DimensionResult;
 
 pub fn analyze(ctx: &AuditContext) -> DimensionResult {
