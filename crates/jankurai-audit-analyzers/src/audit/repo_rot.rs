@@ -109,9 +109,6 @@ fn valid_version_or_migration_path(path: &str, governed_contract_paths: &BTreeSe
     if lower.starts_with("db/migrations/") || lower.contains("/migrations/") {
         return true;
     }
-    if lower.starts_with("contracts/") && has_version_segment(&lower) {
-        return true;
-    }
     if governed_contract_paths.contains(path) {
         return true;
     }

@@ -104,6 +104,41 @@ fn repo_rot_rejects_versioned_contract_without_exact_evidence_pair() {
 }
 
 #[test]
+fn repo_rot_rejects_fake_source_inside_versioned_contract_directory() {
+    let context = ctx(vec![code_file(
+        "contracts/v2/payment-old.rs",
+        "pub fn charge() {}\n",
+    )]);
+
+    let findings = repo_rot::findings(&context);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.matched_term == "repo-rot.path.fake-versioned-source"));
+}
+
+#[test]
+fn repo_rot_rejects_unpaired_schema_inside_versioned_contract_directory() {
+    let context = ctx(vec![code_file(
+        "contracts/v2/widget-events-v2.schema.json",
+        r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 2
+}"#,
+    )]);
+
+    let findings = repo_rot::findings(&context);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.matched_term == "repo-rot.path.fake-versioned-source"));
+}
+
+#[test]
 fn repo_rot_rejects_mismatched_schema_version_and_malformed_jsonl() {
     let mismatched = ctx(vec![
         code_file(
