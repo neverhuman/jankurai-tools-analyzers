@@ -57,6 +57,126 @@ fn repo_rot_summary_is_clean_for_well_named_source() {
 }
 
 #[test]
+fn repo_rot_accepts_structurally_governed_versioned_contract_pair() {
+    let context = ctx(vec![
+        code_file(
+            "contracts/widget-events-v2.schema.json",
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 2,
+  "type": "object"
+}"#,
+        ),
+        code_file(
+            "contracts/widget-events-v2.jsonl",
+            "{\"kind\":\"created\",\"sequence\":1}\n{\"kind\":\"updated\",\"sequence\":2}\n",
+        ),
+    ]);
+
+    let findings = repo_rot::findings(&context);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 0);
+    assert!(findings.iter().all(|finding| {
+        finding.matched_term != "repo-rot.path.fake-versioned-source"
+    }));
+}
+
+#[test]
+fn repo_rot_rejects_versioned_contract_without_exact_evidence_pair() {
+    let context = ctx(vec![code_file(
+        "contracts/widget-events-v2.schema.json",
+        r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 2
+}"#,
+    )]);
+
+    let findings = repo_rot::findings(&context);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.matched_term == "repo-rot.path.fake-versioned-source"));
+}
+
+#[test]
+fn repo_rot_rejects_mismatched_schema_version_and_malformed_jsonl() {
+    let mismatched = ctx(vec![
+        code_file(
+            "contracts/widget-events-v2.schema.json",
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 3
+}"#,
+        ),
+        code_file(
+            "contracts/widget-events-v2.jsonl",
+            "{\"kind\":\"created\"}\n",
+        ),
+    ]);
+    let malformed = ctx(vec![
+        code_file(
+            "contracts/widget-events-v2.schema.json",
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 2
+}"#,
+        ),
+        code_file(
+            "contracts/widget-events-v2.jsonl",
+            "{\"kind\":\"created\"}\nnot-json\n",
+        ),
+    ]);
+
+    assert_eq!(repo_rot::summary(&mismatched).hard_findings, 2);
+    assert_eq!(repo_rot::summary(&malformed).hard_findings, 2);
+}
+
+#[test]
+fn repo_rot_rejects_contract_schema_identity_not_matching_basename() {
+    let context = ctx(vec![
+        code_file(
+            "contracts/widget-events-v2.schema.json",
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/other-events-v2.schema.json",
+  "title": "widget-events-v2",
+  "version": 2
+}"#,
+        ),
+        code_file(
+            "contracts/widget-events-v2.jsonl",
+            "{\"kind\":\"created\"}\n",
+        ),
+    ]);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 2);
+}
+
+#[test]
+fn repo_rot_still_flags_fake_versioned_source_path() {
+    let context = ctx(vec![code_file(
+        "crates/app/src/payment-v2.rs",
+        "pub fn charge() {}\n",
+    )]);
+
+    let findings = repo_rot::findings(&context);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+    assert!(findings
+        .iter()
+        .any(|finding| finding.matched_term == "repo-rot.path.fake-versioned-source"));
+}
+
+#[test]
 fn repo_rot_findings_are_capped_and_deterministic() {
     let context = ctx(vec![code_file(
         "crates/app/src/service.rs",
