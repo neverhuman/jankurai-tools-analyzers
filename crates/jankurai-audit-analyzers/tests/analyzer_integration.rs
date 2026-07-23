@@ -43,6 +43,47 @@ fn code_file(rel_path: &str, text: &str) -> FileInfo {
     }
 }
 
+const MANIFEST_SCHEMA_V2: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/model-artifact-v2.schema.json",
+  "title": "Model artifact v2",
+  "type": "object"
+}"#;
+
+const MANIFEST_SCHEMA_V4: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/model-run-v4.schema.json",
+  "title": "Model run v4",
+  "type": "object"
+}"#;
+
+const MANIFEST_FIXTURE_V2: &str = r#"{"version":2,"features":["x"]}"#;
+
+fn manifest_fixture_context(manifest: &str) -> AuditContext {
+    ctx(vec![
+        code_file("contracts/public-api.toml", manifest),
+        code_file("schemas/model-artifact-v2.schema.json", MANIFEST_SCHEMA_V2),
+        code_file("contracts/model-artifact-v2.json", MANIFEST_FIXTURE_V2),
+        code_file(
+            "crates/model/src/artifact.rs",
+            "pub fn emit_artifact() {}\n",
+        ),
+    ])
+}
+
+fn manifest_row_v2() -> &'static str {
+    r#"
+[[source_contract]]
+id = "model-artifact-v2"
+path = "schemas/model-artifact-v2.schema.json"
+fixture = "contracts/model-artifact-v2.json"
+schema_version = 2
+owner = "core"
+proof_lane = "contracts"
+producer = "crates/model/src/artifact.rs"
+"#
+}
+
 #[test]
 fn repo_rot_summary_is_clean_for_well_named_source() {
     let context = ctx(vec![code_file(
@@ -103,6 +144,134 @@ fn repo_rot_accepts_structurally_governed_v10_contract_pair() {
     ]);
 
     assert_eq!(repo_rot::summary(&context).hard_findings, 0);
+}
+
+#[test]
+fn repo_rot_accepts_typed_manifest_bound_json_fixtures() {
+    let manifest = format!(
+        r#"{}
+[[source_contract]]
+id = "model-run-v4"
+path = "schemas/model-run-v4.schema.json"
+fixture = "contracts/model-run-v4.json"
+schema_version = 4
+owner = "core"
+proof_lane = "contracts"
+producer = "crates/model/src/run.rs"
+"#,
+        manifest_row_v2()
+    );
+    let mut files = manifest_fixture_context(&manifest).all_files;
+    files.push(code_file(
+        "schemas/model-run-v4.schema.json",
+        MANIFEST_SCHEMA_V4,
+    ));
+    files.push(code_file(
+        "contracts/model-run-v4.json",
+        r#"{"schema_version":4,"trials":[]}"#,
+    ));
+    files.push(code_file(
+        "crates/model/src/run.rs",
+        "pub fn emit_run() {}\n",
+    ));
+    let context = ctx(files);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 0);
+}
+
+#[test]
+fn repo_rot_rejects_manifest_row_without_fixture_or_with_absent_fixture() {
+    let missing_field = manifest_fixture_context(
+        &manifest_row_v2().replace("fixture = \"contracts/model-artifact-v2.json\"\n", ""),
+    );
+    let absent_file = manifest_fixture_context(&manifest_row_v2().replace(
+        "contracts/model-artifact-v2.json",
+        "contracts/missing-artifact-v2.json",
+    ));
+
+    assert_eq!(repo_rot::summary(&missing_field).hard_findings, 1);
+    assert_eq!(repo_rot::summary(&absent_file).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_rejects_duplicate_or_traversing_manifest_bindings() {
+    let duplicate =
+        manifest_fixture_context(&format!("{}\n{}", manifest_row_v2(), manifest_row_v2()));
+    let traversal = manifest_fixture_context(&manifest_row_v2().replace(
+        "contracts/model-artifact-v2.json",
+        "contracts/../contracts/model-artifact-v2.json",
+    ));
+
+    assert_eq!(repo_rot::summary(&duplicate).hard_findings, 1);
+    assert_eq!(repo_rot::summary(&traversal).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_rejects_malformed_manifest_or_json_fixture() {
+    let malformed_manifest = manifest_fixture_context("[[source_contract]\n");
+    let mut malformed_fixture = manifest_fixture_context(manifest_row_v2()).all_files;
+    let fixture = malformed_fixture
+        .iter_mut()
+        .find(|file| file.rel_path == "contracts/model-artifact-v2.json")
+        .unwrap();
+    *fixture = code_file("contracts/model-artifact-v2.json", "not-json");
+
+    assert_eq!(repo_rot::summary(&malformed_manifest).hard_findings, 1);
+    assert_eq!(repo_rot::summary(&ctx(malformed_fixture)).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_rejects_manifest_identity_version_or_schema_mismatch() {
+    let mismatches = [
+        manifest_row_v2().replace("id = \"model-artifact-v2\"", "id = \"other-v2\""),
+        manifest_row_v2().replace("schema_version = 2", "schema_version = 4"),
+        manifest_row_v2().replace(
+            "schemas/model-artifact-v2.schema.json",
+            "schemas/other-v2.schema.json",
+        ),
+    ];
+    for manifest in mismatches {
+        assert_eq!(
+            repo_rot::summary(&manifest_fixture_context(&manifest)).hard_findings,
+            1
+        );
+    }
+
+    let mut bad_schema = manifest_fixture_context(manifest_row_v2()).all_files;
+    let schema = bad_schema
+        .iter_mut()
+        .find(|file| file.rel_path == "schemas/model-artifact-v2.schema.json")
+        .unwrap();
+    *schema = code_file(
+        "schemas/model-artifact-v2.schema.json",
+        &MANIFEST_SCHEMA_V2.replace("model-artifact-v2.schema.json", "other-v2.schema.json"),
+    );
+    assert_eq!(repo_rot::summary(&ctx(bad_schema)).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_rejects_manifest_with_absent_producer() {
+    let mut files = manifest_fixture_context(manifest_row_v2()).all_files;
+    files.retain(|file| file.rel_path != "crates/model/src/artifact.rs");
+
+    assert_eq!(repo_rot::summary(&ctx(files)).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_manifest_evidence_does_not_hide_fake_product_source() {
+    let mut files = manifest_fixture_context(manifest_row_v2()).all_files;
+    files.push(code_file(
+        "crates/model/src/payment-v2.rs",
+        "pub fn charge() {}\n",
+    ));
+
+    let context = ctx(files);
+    let findings = repo_rot::findings(&context);
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+    assert!(findings.iter().any(|finding| {
+        finding.path == "crates/model/src/payment-v2.rs"
+            && finding.matched_term == "repo-rot.path.fake-versioned-source"
+    }));
 }
 
 #[test]

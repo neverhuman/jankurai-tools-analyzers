@@ -7,6 +7,7 @@ use jankurai_audit_kernel::audit::language_rules::{LanguageFinding, ProofWindow}
 use jankurai_audit_kernel::model::FileInfo;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 
 const HLT_RULE_ID: &str = "HLT-040-REPO-ROT-BAD-BEHAVIOR";
@@ -32,6 +33,23 @@ pub struct RepoRotSummary {
     pub advisory_signals: usize,
 }
 
+#[derive(Debug, Deserialize)]
+struct PublicApiManifest {
+    #[serde(default)]
+    source_contract: Vec<SourceContract>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceContract {
+    id: String,
+    path: String,
+    fixture: Option<String>,
+    schema_version: u64,
+    owner: String,
+    proof_lane: String,
+    producer: String,
+}
+
 pub fn summary(ctx: &AuditContext) -> RepoRotSummary {
     RepoRotSummary {
         hard_findings: hard_findings(ctx).len(),
@@ -51,7 +69,7 @@ pub fn advisory_signals(ctx: &AuditContext) -> Vec<LanguageFinding> {
 
 fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
     let mut out = Vec::new();
-    let governed_contract_paths = governed_contract_pair_paths(ctx);
+    let governed_contract_paths = governed_contract_paths(ctx);
     for file in ctx.all_files.iter().filter(|file| !excluded(file)) {
         if active_path(file)
             && !valid_version_or_migration_path(&file.rel_path, &governed_contract_paths)
@@ -64,7 +82,7 @@ fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
 
 fn advisory_hits(ctx: &AuditContext) -> Vec<LanguageFinding> {
     let mut out = Vec::new();
-    let governed_contract_paths = governed_contract_pair_paths(ctx);
+    let governed_contract_paths = governed_contract_paths(ctx);
     for file in ctx.all_files.iter().filter(|file| !excluded(file)) {
         if active_path(file)
             && !valid_version_or_migration_path(&file.rel_path, &governed_contract_paths)
@@ -121,6 +139,12 @@ fn valid_version_or_migration_path(path: &str, governed_contract_paths: &BTreeSe
 /// Return only contract basenames whose version is backed by a schema and parseable examples.
 /// A `-vN` suffix alone is not evidence: the schema identity/version and its exact sibling JSONL
 /// must agree before either path is exempted from the fake-versioned-source detector.
+fn governed_contract_paths(ctx: &AuditContext) -> BTreeSet<String> {
+    let mut governed = governed_contract_pair_paths(ctx);
+    governed.extend(governed_manifest_fixture_paths(ctx));
+    governed
+}
+
 fn governed_contract_pair_paths(ctx: &AuditContext) -> BTreeSet<String> {
     let files = ctx
         .all_files
@@ -154,6 +178,142 @@ fn governed_contract_pair_paths(ctx: &AuditContext) -> BTreeSet<String> {
         }
     }
     governed
+}
+
+/// Return versioned JSON fixtures bound by the repository's typed public API manifest.
+///
+/// These fixtures do not have an exact sibling schema: the schema lives under `schemas/`.
+/// The manifest therefore has to bind both paths and enough independent identity to make a
+/// `-vN` suffix evidence rather than an allowlist.
+fn governed_manifest_fixture_paths(ctx: &AuditContext) -> BTreeSet<String> {
+    let files = ctx
+        .all_files
+        .iter()
+        .map(|file| (file.rel_path.as_str(), file))
+        .collect::<BTreeMap<_, _>>();
+    let Some(manifest_file) = files.get("contracts/public-api.toml") else {
+        return BTreeSet::new();
+    };
+    let Ok(manifest) = toml::from_str::<PublicApiManifest>(&manifest_file.text) else {
+        return BTreeSet::new();
+    };
+
+    let mut id_counts = BTreeMap::<&str, usize>::new();
+    let mut schema_counts = BTreeMap::<&str, usize>::new();
+    let mut fixture_counts = BTreeMap::<&str, usize>::new();
+    for contract in &manifest.source_contract {
+        *id_counts.entry(contract.id.as_str()).or_default() += 1;
+        *schema_counts.entry(contract.path.as_str()).or_default() += 1;
+        if let Some(fixture) = contract.fixture.as_deref() {
+            *fixture_counts.entry(fixture).or_default() += 1;
+        }
+    }
+
+    let mut governed = BTreeSet::new();
+    for contract in &manifest.source_contract {
+        let Some(fixture_path) = contract.fixture.as_deref() else {
+            continue;
+        };
+        if id_counts.get(contract.id.as_str()) != Some(&1)
+            || schema_counts.get(contract.path.as_str()) != Some(&1)
+            || fixture_counts.get(fixture_path) != Some(&1)
+            || !valid_manifest_contract_paths(contract, fixture_path)
+        {
+            continue;
+        }
+        let Some(schema) = files.get(contract.path.as_str()) else {
+            continue;
+        };
+        let Some(fixture) = files.get(fixture_path) else {
+            continue;
+        };
+        if !files.contains_key(contract.producer.as_str())
+            || !valid_manifest_schema(schema)
+            || !valid_json_object_fixture(&fixture.text)
+        {
+            continue;
+        }
+        governed.insert(schema.rel_path.clone());
+        governed.insert(fixture.rel_path.clone());
+    }
+    governed
+}
+
+fn valid_manifest_contract_paths(contract: &SourceContract, fixture_path: &str) -> bool {
+    if contract.owner.trim().is_empty()
+        || contract.proof_lane.trim().is_empty()
+        || contract.producer.trim().is_empty()
+        || !normalized_repo_path(&contract.producer)
+        || !normalized_repo_path(&contract.path)
+        || !normalized_repo_path(fixture_path)
+        || !(contract.path.starts_with("schemas/") || contract.path.starts_with("contracts/"))
+        || !contract.path.ends_with(".schema.json")
+        || !fixture_path.starts_with("contracts/")
+        || !fixture_path.ends_with(".json")
+    {
+        return false;
+    }
+
+    let Some(schema_id) = contract
+        .path
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.strip_suffix(".schema.json"))
+    else {
+        return false;
+    };
+    let Some(fixture_id) = fixture_path
+        .rsplit('/')
+        .next()
+        .and_then(|name| name.strip_suffix(".json"))
+    else {
+        return false;
+    };
+    let Some(version) = contract_basename_version(&contract.id) else {
+        return false;
+    };
+
+    schema_id == contract.id && fixture_id == contract.id && version == contract.schema_version
+}
+
+fn normalized_repo_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|segment| !segment.is_empty() && !matches!(segment, "." | ".."))
+}
+
+fn valid_manifest_schema(schema: &FileInfo) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&schema.text) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    let schema_name = schema.rel_path.rsplit('/').next().unwrap_or_default();
+    let schema_id_path = format!("/{schema_name}");
+
+    object
+        .get("$schema")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && object
+            .get("$id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value == schema_name || value.ends_with(&schema_id_path))
+        && object
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        && object.get("type").and_then(serde_json::Value::as_str) == Some("object")
+}
+
+fn valid_json_object_fixture(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .is_some_and(|value| value.is_object())
 }
 
 fn contract_basename_version(base_name: &str) -> Option<u64> {
