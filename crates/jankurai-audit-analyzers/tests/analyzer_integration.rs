@@ -146,6 +146,42 @@ fn repo_rot_rejects_unpaired_v10_schema() {
 }
 
 #[test]
+fn repo_rot_rejects_unpaired_out_of_range_numeric_schema() {
+    let context = ctx(vec![code_file(
+        "contracts/widget-events-v18446744073709551616.schema.json",
+        r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v18446744073709551616.schema.json",
+  "title": "widget-events-v18446744073709551616",
+  "version": "18446744073709551616"
+}"#,
+    )]);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 1);
+}
+
+#[test]
+fn repo_rot_rejects_out_of_range_numeric_contract_pair() {
+    let context = ctx(vec![
+        code_file(
+            "contracts/widget-events-v18446744073709551616.schema.json",
+            r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.example.test/widget-events-v18446744073709551616.schema.json",
+  "title": "widget-events-v18446744073709551616",
+  "version": "18446744073709551616"
+}"#,
+        ),
+        code_file(
+            "contracts/widget-events-v18446744073709551616.jsonl",
+            "{\"kind\":\"created\",\"sequence\":1}\n",
+        ),
+    ]);
+
+    assert_eq!(repo_rot::summary(&context).hard_findings, 2);
+}
+
+#[test]
 fn repo_rot_rejects_fake_source_inside_versioned_contract_directory() {
     let context = ctx(vec![code_file(
         "contracts/v2/payment-old.rs",

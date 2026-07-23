@@ -157,9 +157,16 @@ fn governed_contract_pair_paths(ctx: &AuditContext) -> BTreeSet<String> {
 }
 
 fn contract_basename_version(base_name: &str) -> Option<u64> {
+    contract_basename_version_digits(base_name)?
+        .parse::<u64>()
+        .ok()
+}
+
+fn contract_basename_version_digits(base_name: &str) -> Option<&str> {
     let captures = CONTRACT_VERSION_BASENAME_RE.captures(base_name)?;
-    let version = captures.get(1)?.as_str().parse::<u64>().ok()?;
-    (version >= 2).then_some(version)
+    let digits = captures.get(1)?.as_str();
+    let significant = digits.trim_start_matches('0');
+    (!matches!(significant, "" | "1")).then_some(digits)
 }
 
 fn valid_contract_schema(schema: &FileInfo, base_name: &str, version: u64) -> bool {
@@ -260,7 +267,7 @@ fn path_rot_hits(file: &FileInfo) -> Vec<LanguageFinding> {
     if file_stem.starts_with("copy_code") {
         return out;
     }
-    let fake_versioned_file = contract_basename_version(file_stem).is_some()
+    let fake_versioned_file = contract_basename_version_digits(file_stem).is_some()
         || FAKE_VERSION_SUFFIX_RE.is_match(file_stem)
         || file_stem.contains("copy-of")
         || file_stem.contains("final-final");
