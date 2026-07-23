@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 const HLT_RULE_ID: &str = "HLT-040-REPO-ROT-BAD-BEHAVIOR";
 
 static FAKE_VERSION_SUFFIX_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|[_\-.])(old|backup|bak|copy|final|v[2-9])(?:[_\-.]|$)")
+    Regex::new(r"(?i)(?:^|[_\-.])(old|backup|bak|copy|final)(?:[_\-.]|$)")
         .expect("repo-rot fake version regex is valid")
 });
 
@@ -260,7 +260,8 @@ fn path_rot_hits(file: &FileInfo) -> Vec<LanguageFinding> {
     if file_stem.starts_with("copy_code") {
         return out;
     }
-    let fake_versioned_file = FAKE_VERSION_SUFFIX_RE.is_match(file_stem)
+    let fake_versioned_file = contract_basename_version(file_stem).is_some()
+        || FAKE_VERSION_SUFFIX_RE.is_match(file_stem)
         || file_stem.contains("copy-of")
         || file_stem.contains("final-final");
     if exact_rot_segment || fake_versioned_file {
