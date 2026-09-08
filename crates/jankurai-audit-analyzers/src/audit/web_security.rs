@@ -8,6 +8,9 @@ use jankurai_audit_kernel::model::FileInfo;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+mod storage;
+mod storage_tokens;
+
 const HLT_RULE_ID: &str = "HLT-039-WEB-SECURITY-BAD-BEHAVIOR";
 
 static VITE_ENV_RE: Lazy<Regex> =
@@ -44,7 +47,7 @@ fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
             out.extend(vite_env_secret_hits(file));
         }
         if is_browser_source(file) {
-            out.extend(browser_storage_hits(file));
+            out.extend(storage::findings(file));
         }
         if is_cors_surface(file) {
             out.extend(credentialed_wildcard_cors_hits(file));
@@ -248,45 +251,6 @@ fn vite_env_name_is_secret(name: &str) -> bool {
         && !["public", "publishable", "anon", "mapbox"]
             .iter()
             .any(|needle| lower.contains(needle))
-}
-
-fn browser_storage_hits(file: &FileInfo) -> Vec<LanguageFinding> {
-    let mut out = Vec::new();
-    for (idx, raw_line) in file.text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = strip_comments_for_line_language(raw_line, "ts");
-        let lower = line.to_ascii_lowercase();
-        if lower.is_empty() || nearby_allow(&file.text, line_no, "websec.storage.token") {
-            continue;
-        }
-        let storage = lower.contains("localstorage") || lower.contains("sessionstorage");
-        let sensitive = [
-            "token",
-            "jwt",
-            "access_token",
-            "refresh_token",
-            "session",
-            "secret",
-            "password",
-            "authorization",
-        ]
-        .iter()
-        .any(|needle| lower.contains(needle));
-        let removal_only = lower.contains(".removeitem(") || lower.contains(".clear(");
-        if storage && sensitive && !removal_only {
-            out.push(finding(
-                HLT_RULE_ID,
-                "websec.storage.token",
-                file,
-                line_no,
-                "sensitive token or session material is stored in browser-accessible storage",
-                "localStorage and sessionStorage are readable by injected JavaScript",
-                "prefer HttpOnly Secure SameSite cookies or a bounded in-memory token flow with documented threat model",
-                ProofWindow::None,
-            ));
-        }
-    }
-    out
 }
 
 fn credentialed_wildcard_cors_hits(file: &FileInfo) -> Vec<LanguageFinding> {
