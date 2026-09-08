@@ -17,7 +17,7 @@ mkdir -p target/jankurai target/jankurai/security target/jankurai/coverage \
 # audit-ci / proof-routing / contract-drift / authz-matrix / agent-tool-supply
 # / release-readiness / cost-budget all adopt the ratchet audit command.
 log "tool-adoption: ratchet audit"
-jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
+jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --full
 # Adopted artifacts: .jankurai/repo-score.json .jankurai/repo-score.md
 # target/jankurai/repair-queue.jsonl
 
@@ -40,7 +40,7 @@ jankurai copy-code . --json target/jankurai/copy-code.json --md target/jankurai/
 
 # security: secret + dependency + SBOM/provenance evidence in one lane.
 log "tool-adoption: security run"
-jankurai security run . --out target/jankurai/security/evidence.json
+jankurai security run . --out target/jankurai/security/evidence.json --script ops/ci/security-scans.sh
 # Adopted artifact: target/jankurai/security/evidence.json
 
 # ci/git/release bad-behavior: language-level workflow safety tests.
@@ -50,7 +50,7 @@ test -s target/jankurai/language-bad-behavior.log
 
 # contract-drift: boundary manifest schema and public-API drift hooks.
 log "tool-adoption: contract drift (ratchet audit)"
-jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md
+jankurai audit . --mode ratchet --baseline target/jankurai/accepted-baseline.json --json target/jankurai/repo-score.json --md target/jankurai/repo-score.md --full
 
 # rust-witness: changed-behavior witness graph for Rust.
 log "tool-adoption: rust witness"
