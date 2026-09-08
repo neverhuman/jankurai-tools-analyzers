@@ -92,6 +92,10 @@
     ".": {
       "command": "bash scripts/ci-local.sh required",
       "purpose": "required local proof for jankurai-tools-analyzers"
+    },
+    ".gitleaksignore": {
+      "command": "bash ops/ci/github-check.sh",
+      "purpose": "scan secrets with exact historical documentation fingerprints"
     }
   }
 }

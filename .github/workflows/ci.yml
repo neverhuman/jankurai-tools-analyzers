@@ -1,104 +1,80 @@
 name: ci
-
-# Continuous integration for jankurai-tools-analyzers.
-# Thin workflow: every job delegates to ops/ci/<lane>.sh so local runs and CI
-# execute the exact same commands (see scripts/ci-local.sh). Three lanes:
-# build/fast, security (secret + dependency scanning), and a jankurai audit
-# lane that publishes repo-score artifacts.
-# Every third-party action is pinned to a full 40-character commit SHA.
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
+  workflow_dispatch:
 permissions:
   contents: read
-
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
-  build:
-    name: build-and-fast
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  quality:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b
+        with:
+          toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Cache cargo registry and build
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-      - name: Install nextest
-        uses: taiki-e/install-action@9ca1734d8940023f074414ee621fd530c4ce10f2 # v2.62.45
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
-          tool: nextest
-      - name: Deterministic fast lane
-        run: bash ops/ci/fast.sh
-
-  security:
-    name: security-scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
-      - name: Secret and dependency scanning
-        run: bash ops/ci/security.sh
-
-  audit:
-    name: jankurai-audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
-      - name: Run jankurai audit lane
-        run: bash ops/ci/audit.sh
-      - name: Upload repo-score artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+          node-version: 24
+          package-manager-cache: false
+      - uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff
         with:
-          name: repo-score
+          tool: cargo-nextest@0.9.137,cargo-audit@0.22.1,cargo-deny@0.19.8,syft@1.40.0,zizmor@1.25.2
+          fallback: none
+      - run: bash ops/ci/github-setup.sh
+      - run: bash ops/ci/github-check.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: quality-evidence
           path: |
+            target/jankurai
             .jankurai/repo-score.json
             .jankurai/repo-score.md
-
-  tool-adoption:
-    name: tool-adoption-evidence
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+          include-hidden-files: true
+          if-no-files-found: error
+  required:
+    name: jankurai-tools-analyzers/required
+    needs: quality
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
-      - name: Run adopted jankurai tool lanes
-        run: bash ops/ci/tool-adoption.sh
-      - name: Upload tool-adoption evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          name: tool-adoption-evidence
-          path: |
-            target/jankurai/repo-score.json
-            target/jankurai/repo-score.md
-            target/jankurai/repair-queue.jsonl
-            target/jankurai/proofbind/surface-witness.json
-            target/jankurai/proofbind/obligations.json
-            target/jankurai/proofmark/proofmark-receipt.json
-            target/jankurai/proofmark/proof-receipt.json
-            target/jankurai/copy-code.json
-            target/jankurai/copy-code.md
-            target/jankurai/security/evidence.json
-            target/jankurai/language-bad-behavior.log
-            target/jankurai/rust/witness-graph.json
-            target/jankurai/coverage/coverage-audit.json
-            target/jankurai/coverage/coverage-audit.md
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: bash ops/ci/aggregate.sh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+  publish-ci-tag:
+    needs: required
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: bash ops/ci/publish-ci-tag.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

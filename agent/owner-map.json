@@ -35,6 +35,7 @@
     "assets/": "paper",
     "tips/": "paper",
     "repos.manifest.toml": "workspace",
-    "family.lock": "workspace"
+    "family.lock": "workspace",
+    ".gitleaksignore": "ops"
   }
 }
