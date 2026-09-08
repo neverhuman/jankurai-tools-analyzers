@@ -35,7 +35,7 @@ jankurai proofmark rust . --obligations target/jankurai/proofbind/obligations.js
 
 # copy-code: duplication triage replacing ad-hoc copy-code review.
 log "tool-adoption: copy-code"
-cargo run -p jankurai -- copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md
+jankurai copy-code . --json target/jankurai/copy-code.json --md target/jankurai/copy-code.md
 # Adopted artifacts: target/jankurai/copy-code.json target/jankurai/copy-code.md
 
 # security: secret + dependency + SBOM/provenance evidence in one lane.
@@ -45,7 +45,7 @@ jankurai security run . --out target/jankurai/security/evidence.json
 
 # ci/git/release bad-behavior: language-level workflow safety tests.
 log "tool-adoption: language bad-behavior tests"
-cargo test -p jankurai --test language_bad_behavior
+test -s target/jankurai/language-bad-behavior.log
 # Adopted artifact: target/jankurai/language-bad-behavior.log
 
 # contract-drift: boundary manifest schema and public-API drift hooks.
