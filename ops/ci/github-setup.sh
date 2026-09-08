@@ -16,7 +16,7 @@ if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
 fi
 if [[ -f Cargo.toml ]]; then cargo fetch --locked; fi
 if [[ -f package-lock.json ]]; then npm ci; fi
-if [[ -d packages/ux-qa ]]; then npm exec -- playwright install --with-deps chromium; fi
+if [[ -d packages/ux-qa ]]; then npm exec -- playwright install --with-deps chromium --only-shell; fi
 # Build an exact published auditor source in an automatically removed CI sandbox.
 source_root="$(mktemp -d "$repo_root/target/ci-auditor.XXXXXX")"
 trap 'rm -rf "$source_root"' EXIT
