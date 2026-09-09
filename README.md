@@ -1,7 +1,10 @@
 # jankurai-tools-analyzers
 
+<!-- jankurai-badge:start -->
+[![Jankurai score: 94/100](agent/jankurai-badge.svg)](agent/jankurai-badge.json)
+<!-- jankurai-badge:end -->
+
 [![CI](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml)
-[![jankurai audit](https://img.shields.io/badge/jankurai_audit-self--hosted-blue.svg)](.github/workflows/ci.yml)
 
 Dimension analyzers and scoring suite for the **jankurai** audit standard. This
 repository is one member of the Jankurai split family; read [`SPLIT.md`](SPLIT.md)
