@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0.0",
+  "standard": "jankurai",
+  "standard_version": "0.9.0",
+  "auditor_version": "1.6.0",
+  "source_report": "agent/baselines/main.repo-score.json",
+  "source_badge_fingerprint": "sha256:a5f0a706422e2c1db981ad199c616b14e75ceec6e883d6c1da3b4cb3a9e7afa5",
+  "score": 94,
+  "raw_score": 94,
+  "minimum_score": 85,
+  "decision": "pass",
+  "passed": true,
+  "findings": 3,
+  "hard_findings": 0,
+  "soft_findings": 3,
+  "caps": 0,
+  "conformance_level": "HL3",
+  "badge_svg": "agent/jankurai-badge.svg",
+  "readme": "README.md",
+  "markdown": "<!-- jankurai-badge:start -->\n[![Jankurai score: 94/100](agent/jankurai-badge.svg)](agent/jankurai-badge.json)\n<!-- jankurai-badge:end -->\n"
+}
