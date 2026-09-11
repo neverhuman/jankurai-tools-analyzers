@@ -70,6 +70,16 @@ blocking outcomes; advisory sources retain warnings. De-duplication and display
 limits cannot discard the strongest failure. `coverage_summary_integrity.rs`
 exercises these rules through the complete coverage audit entry point.
 
+The cargo-mutants importer reads the explicit `outcomes` list, recognizes
+native `CaughtMutant`/`MissedMutant` results, and excludes a successful baseline
+from mutation counts. It also accepts the existing explicit legacy
+`caught`/`missed` and `killed`/`survived` records. Missing or unknown outcomes,
+failed baselines, timeouts, check-only `Success` results, conflicting source
+locations, and declared totals inconsistent with the records are incomplete
+inputs. They cannot become clean mutation coverage. The wire format follows
+[cargo-mutants 25.3.1](https://github.com/sourcefrog/cargo-mutants/blob/v25.3.1/src/outcome.rs);
+`coverage_mutation_integrity.rs` covers native and legacy parsing and refusal.
+
 ## Agent-friendly exception pattern
 
 Exceptions are the only sanctioned way to deviate from the audit baseline. They

@@ -14,6 +14,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+mod cargo_mutants;
 mod lcov;
 mod summary;
 
@@ -514,11 +515,7 @@ pub fn parse_lcov(path: &Path, max_bytes: u64) -> Result<LcovReport> {
 }
 
 pub fn parse_cargo_mutants_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse cargo-mutants JSON")?;
-    let mut outcomes = Vec::new();
-    collect_mutation_outcomes(&value, None, &mut outcomes);
-    Ok(build_mutation_report(outcomes))
+    cargo_mutants::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_stryker_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
