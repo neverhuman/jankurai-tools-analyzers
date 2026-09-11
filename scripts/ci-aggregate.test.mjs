@@ -90,7 +90,6 @@ function assertWorkflowLanes(source) {
   assert.match(source, /^      checks: read$/m);
   assert.match(source, /^      - run: bash ops\/ci\/github-check\.sh$/m);
   assert.match(source, /^    if: always\(\)$/m);
-  assert.match(source, /^      - run: node --test scripts\/ci-aggregate\.test\.mjs$/m);
   assert.match(source, /^      - run: bash ops\/ci\/aggregate\.sh --hosted$/m);
 }
 
@@ -110,12 +109,24 @@ test('workflow mutations removing quality or always() are rejected', () => {
     workflow.replace(/^    if: always\(\)\n/m, ''),
     workflow.replace('name: quality', 'name: renamed-quality'),
     workflow.replace('checks: read', 'checks: none'),
-    workflow.replace('node --test scripts/ci-aggregate.test.mjs', 'true'),
     workflow.replace('bash ops/ci/aggregate.sh', 'bash ops/ci/required.sh'),
   ]) {
     assert.notEqual(changed, workflow);
     assert.throws(() => assertWorkflowLanes(changed));
   }
+});
+
+function assertRecipeControls(required, quality) {
+  assert.match(required, /^node --test scripts\/ci-aggregate\.test\.mjs$/m);
+  assert.match(quality, /^bash scripts\/ci-local\.sh required$/m);
+}
+
+test('owning recipes execute aggregate controls through the required lane', () => {
+  const required = fs.readFileSync(path.join(root, 'ops/ci/required.sh'), 'utf8');
+  const quality = fs.readFileSync(path.join(root, 'ops/ci/github-check.sh'), 'utf8');
+  assertRecipeControls(required, quality);
+  assert.throws(() => assertRecipeControls(required.replace('node --test scripts/ci-aggregate.test.mjs', 'true'), quality));
+  assert.throws(() => assertRecipeControls(required, quality.replace('bash scripts/ci-local.sh required', 'true')));
 });
 
 const runId = '123', head = 'a'.repeat(40), attempt = '2';
