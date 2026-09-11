@@ -52,7 +52,11 @@ fn trivy_preserves_scanned_clean_targets_and_all_vulnerability_levels() {
             .vulnerabilities
             .is_empty());
     }
-    let text = json!({"Results": [{"Target": "Cargo.lock", "Vulnerabilities": ["CRITICAL", "HIGH", "MEDIUM", "LOW"].map(|severity| json!({"VulnerabilityID": "CVE-2099-0001", "PkgName": "example", "Severity": severity}))}]}).to_string();
+    let vulnerabilities = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].map(|severity| {
+        json!({"VulnerabilityID": "CVE-2099-0001", "PkgName": "example", "Severity": severity})
+    });
+    let text = json!({"Results": [{"Target": "Cargo.lock", "Vulnerabilities": vulnerabilities}]})
+        .to_string();
     let report = input(&text, coverage::parse_trivy_json).unwrap();
     assert_eq!(
         (report.critical, report.high, report.medium, report.low),
