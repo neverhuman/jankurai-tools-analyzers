@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+
+mod lcov;
 
 pub const DEFAULT_CONFIG_PATH: &str = "agent/coverage-sources.toml";
 pub const DEFAULT_JSON_PATH: &str = "target/jankurai/coverage/coverage-audit.json";
@@ -500,79 +503,7 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
 }
 
 pub fn parse_lcov(path: &Path, max_bytes: u64) -> Result<LcovReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut report = LcovReport::default();
-    let mut current_path: Option<String> = None;
-    let mut current_file = LcovFile::default();
-
-    for (idx, raw_line) in text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with("TN:") {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("SF:") {
-            if let Some(path) = current_path.take() {
-                flush_lcov_file(&mut report, path, std::mem::take(&mut current_file));
-            }
-            if rest.trim().is_empty() {
-                bail!("malformed LCOV at line {line_no}: empty SF record");
-            }
-            current_path = Some(normalize_source_path(&repo_root, rest.trim()));
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("DA:") {
-            let Some(_) = current_path.as_ref() else {
-                bail!("malformed LCOV at line {line_no}: DA record before SF");
-            };
-            let mut parts = rest.split(',');
-            let Some(line_part) = parts.next() else {
-                bail!("malformed LCOV at line {line_no}: missing DA line");
-            };
-            let Some(count_part) = parts.next() else {
-                bail!("malformed LCOV at line {line_no}: missing DA count");
-            };
-            let source_line: usize = line_part
-                .parse()
-                .with_context(|| format!("malformed LCOV at line {line_no}: invalid DA line"))?;
-            let count: u64 = count_part
-                .parse()
-                .with_context(|| format!("malformed LCOV at line {line_no}: invalid DA count"))?;
-            current_file.lines.insert(source_line, count);
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("BRDA:") {
-            let fields = rest.split(',').collect::<Vec<_>>();
-            if fields.len() != 4 {
-                bail!("malformed LCOV at line {line_no}: invalid BRDA record");
-            }
-            report.total_branches += 1;
-            if fields[3] != "-" && fields[3].parse::<u64>().unwrap_or(0) > 0 {
-                report.covered_branches += 1;
-            }
-            continue;
-        }
-        if line == "end_of_record" {
-            let Some(path) = current_path.take() else {
-                bail!("malformed LCOV at line {line_no}: end_of_record before SF");
-            };
-            flush_lcov_file(&mut report, path, std::mem::take(&mut current_file));
-            continue;
-        }
-    }
-
-    if let Some(path) = current_path.take() {
-        report
-            .parser_warnings
-            .push("LCOV file ended without end_of_record; final record was accepted".into());
-        flush_lcov_file(&mut report, path, current_file);
-    }
-
-    if report.files.is_empty() {
-        bail!("LCOV report contains no source records");
-    }
-    Ok(report)
+    lcov::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_cargo_mutants_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
@@ -1375,12 +1306,6 @@ fn render_coverage_markdown(audit: &CoverageAudit) -> String {
     out
 }
 
-fn flush_lcov_file(report: &mut LcovReport, path: String, file: LcovFile) {
-    report.total_lines += file.lines.len();
-    report.covered_lines += file.lines.values().filter(|count| **count > 0).count();
-    report.files.insert(path, file);
-}
-
 fn collect_mutation_outcomes(
     value: &Value,
     parent_path: Option<&str>,
@@ -1698,12 +1623,16 @@ fn auto_source_enabled(repo_root: &Path, source: &CoverageSource) -> Result<bool
     for entry in walkdir::WalkDir::new(repo_root)
         .into_iter()
         .filter_entry(|entry| entry.file_name() != ".git" && entry.file_name() != "target")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
     {
+        let entry = entry.context("incomplete coverage analysis: discover applicable source")?;
         let rel = display_rel(repo_root, entry.path());
         if matcher.is_match(rel.as_str()) {
-            return Ok(true);
+            if entry.file_type().is_symlink() {
+                bail!("incomplete coverage analysis: applicable source is a symlink: {rel}");
+            }
+            if entry.file_type().is_file() {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
@@ -1789,21 +1718,41 @@ fn parse_changed_lines_diff(diff: &str) -> BTreeMap<String, BTreeSet<usize>> {
 }
 
 fn read_bounded_text(path: &Path, max_bytes: u64) -> Result<String> {
-    let metadata = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    let read_limit = max_bytes
+        .checked_add(1)
+        .context("invalid artifact byte limit")?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect coverage input {}", path.display()))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        bail!(
+            "coverage input must be a nonempty regular file: {}",
+            path.display()
+        );
+    }
     if metadata.len() > max_bytes {
         bail!(
-            "artifact {} is {} bytes, above max_artifact_bytes {}",
+            "artifact {} exceeds max_artifact_bytes {}",
             path.display(),
-            metadata.len(),
             max_bytes
         );
     }
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    if bytes.len() as u64 > max_bytes {
+    let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    let after = file
+        .metadata()
+        .with_context(|| format!("inspect open input {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes
+        || bytes.len() as u64 != metadata.len()
+        || after.len() != metadata.len()
+        || after.modified()? != metadata.modified()?
+    {
         bail!(
-            "artifact {} exceeded max_artifact_bytes {} while reading",
-            path.display(),
-            max_bytes
+            "coverage input changed or exceeded its byte limit while reading: {}",
+            path.display()
         );
     }
     String::from_utf8(bytes).with_context(|| format!("{} is not valid UTF-8", path.display()))

@@ -45,6 +45,21 @@ declared in [`agent/coverage-sources.toml`](../agent/coverage-sources.toml). The
 HLT-008 false-green check requires both property and integration Rust tests on
 the analyzer surface; both are present under the crate's `tests/` directory.
 
+LCOV input must contain complete `SF` / `end_of_record` sections and valid
+line/branch counts. Declared line and branch totals must match their records;
+truncation, duplicate records within a section, unknown records, and invalid
+counts produce parser findings. Required sources retain a blocking finding.
+Repeated complete sections for different tests merge their hits and preserve
+all instrumented lines. Artifact reads are bounded and require nonempty regular
+UTF-8 files. Input-discovery errors cannot disable an automatic source.
+
+The parser follows the [LCOV tracefile format](https://github.com/linux-test-project/lcov/blob/master/docs/man/geninfo.rst).
+Function/version metadata is diagnostic; it does not establish line or branch
+coverage. Unsupported extensions require an explicit parser change. These
+checks validate imported data structure; they do not authenticate execution,
+producer identity or freshness. `coverage_input_integrity.rs` retains the
+malformed, truncated, duplicate-section and required-source refusal controls.
+
 ## Agent-friendly exception pattern
 
 Exceptions are the only sanctioned way to deviate from the audit baseline. They
