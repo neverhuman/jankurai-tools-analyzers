@@ -80,6 +80,15 @@ inputs. They cannot become clean mutation coverage. The wire format follows
 [cargo-mutants 25.3.1](https://github.com/sourcefrog/cargo-mutants/blob/v25.3.1/src/outcome.rs);
 `coverage_mutation_integrity.rs` covers native and legacy parsing and refusal.
 
+Stryker must provide a supported schema version and an explicit file/mutant
+inventory. Duplicate files or mutant IDs, unknown states, pending mutations,
+runtime errors and timeouts are incomplete inputs. Trivy requires scanned
+targets and structurally valid vulnerabilities with assessed severities;
+missing results and unknown severities cannot become zero vulnerabilities.
+Hadolint accepts an empty diagnostic list, but every present diagnostic must
+have a valid location, level, code and message. `coverage_scanner_integrity.rs`
+retains positive and malformed-input controls for these formats.
+
 ## Agent-friendly exception pattern
 
 Exceptions are the only sanctioned way to deviate from the audit baseline. They

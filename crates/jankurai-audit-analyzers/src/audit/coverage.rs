@@ -16,6 +16,8 @@ use std::process::Command;
 
 mod cargo_mutants;
 mod lcov;
+mod scanners;
+mod stryker;
 mod summary;
 
 pub const DEFAULT_CONFIG_PATH: &str = "agent/coverage-sources.toml";
@@ -519,120 +521,15 @@ pub fn parse_cargo_mutants_json(path: &Path, max_bytes: u64) -> Result<MutationR
 }
 
 pub fn parse_stryker_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Stryker JSON")?;
-    let mut outcomes = Vec::new();
-    if let Some(files) = value.get("files").and_then(Value::as_object) {
-        for (file_path, file_value) in files {
-            if let Some(mutants) = file_value.get("mutants").and_then(Value::as_array) {
-                for mutant in mutants {
-                    if let Some(outcome) = mutation_outcome_from_value(mutant, Some(file_path)) {
-                        outcomes.push(outcome);
-                    }
-                }
-            }
-        }
-    }
-    if outcomes.is_empty() {
-        collect_mutation_outcomes(&value, None, &mut outcomes);
-    }
-    Ok(build_mutation_report(outcomes))
+    stryker::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_trivy_json(path: &Path, max_bytes: u64) -> Result<SecurityReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Trivy JSON")?;
-    let mut report = SecurityReport::default();
-    for result in value
-        .get("Results")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let target = result
-            .get("Target")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        for vuln in result
-            .get("Vulnerabilities")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let severity = vuln
-                .get("Severity")
-                .and_then(Value::as_str)
-                .unwrap_or("UNKNOWN")
-                .to_ascii_uppercase();
-            match severity.as_str() {
-                "CRITICAL" => report.critical += 1,
-                "HIGH" => report.high += 1,
-                "MEDIUM" => report.medium += 1,
-                "LOW" => report.low += 1,
-                _ => {}
-            }
-            report.vulnerabilities.push(SecurityIssue {
-                target: target.clone(),
-                vulnerability_id: vuln
-                    .get("VulnerabilityID")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                package_name: vuln
-                    .get("PkgName")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                severity,
-                title: vuln
-                    .get("Title")
-                    .or_else(|| vuln.get("Description"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("vulnerability reported by Trivy")
-                    .to_string(),
-            });
-        }
-    }
-    Ok(report)
+    scanners::trivy(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_hadolint_json(path: &Path, max_bytes: u64) -> Result<ContainerLintReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Hadolint JSON")?;
-    let items = value
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Hadolint JSON must be an array"))?;
-    let mut report = ContainerLintReport::default();
-    for item in items {
-        report.diagnostics.push(ContainerLintIssue {
-            file: item
-                .get("file")
-                .and_then(Value::as_str)
-                .unwrap_or("Dockerfile")
-                .to_string(),
-            line: item
-                .get("line")
-                .and_then(Value::as_u64)
-                .map(|line| line as usize),
-            code: item
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("hadolint")
-                .to_string(),
-            level: item
-                .get("level")
-                .and_then(Value::as_str)
-                .unwrap_or("info")
-                .to_ascii_lowercase(),
-            message: item
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Hadolint diagnostic")
-                .to_string(),
-        });
-    }
-    Ok(report)
+    scanners::hadolint(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn write_coverage_json(path: &Path, audit: &CoverageAudit) -> Result<()> {
@@ -1207,134 +1104,6 @@ fn render_coverage_markdown(audit: &CoverageAudit) -> String {
     out
 }
 
-fn collect_mutation_outcomes(
-    value: &Value,
-    parent_path: Option<&str>,
-    outcomes: &mut Vec<MutationOutcome>,
-) {
-    if let Some(outcome) = mutation_outcome_from_value(value, parent_path) {
-        outcomes.push(outcome);
-    }
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                collect_mutation_outcomes(item, parent_path, outcomes);
-            }
-        }
-        Value::Object(object) => {
-            for (key, child) in object {
-                let next_parent = if key.ends_with(".rs")
-                    || key.ends_with(".ts")
-                    || key.ends_with(".tsx")
-                    || key.ends_with(".js")
-                {
-                    Some(key.as_str())
-                } else {
-                    parent_path
-                };
-                collect_mutation_outcomes(child, next_parent, outcomes);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn mutation_outcome_from_value(
-    value: &Value,
-    parent_path: Option<&str>,
-) -> Option<MutationOutcome> {
-    let object = value.as_object()?;
-    let raw_status = object
-        .get("status")
-        .or_else(|| object.get("summary"))
-        .or_else(|| object.get("outcome"))
-        .or_else(|| object.get("result"))
-        .and_then(Value::as_str)?;
-    let status = normalize_mutation_status(raw_status)?;
-    let path = string_field(object, &["path", "file", "filename", "source_file"])
-        .or_else(|| {
-            object
-                .get("mutant")
-                .and_then(Value::as_object)
-                .and_then(|object| {
-                    string_field(object, &["path", "file", "filename", "source_file"])
-                })
-        })
-        .or_else(|| {
-            cargo_mutants_scenario(object, |mutant| {
-                string_field(mutant, &["path", "file", "filename", "source_file"])
-            })
-        })
-        .or_else(|| parent_path.map(ToString::to_string))
-        .unwrap_or_default();
-    let line = object
-        .get("line")
-        .or_else(|| object.get("start_line"))
-        .and_then(Value::as_u64)
-        .map(|line| line as usize)
-        .or_else(|| line_from_span(object))
-        .or_else(|| cargo_mutants_scenario(object, line_from_span))
-        .or_else(|| {
-            object
-                .get("location")
-                .and_then(|location| location.get("start"))
-                .and_then(|start| start.get("line"))
-                .and_then(Value::as_u64)
-                .map(|line| line as usize)
-        });
-    let message = string_field(object, &["name", "mutatorName", "description", "id"])
-        .or_else(|| {
-            cargo_mutants_scenario(object, |mutant| {
-                string_field(mutant, &["name", "mutatorName", "description", "id"])
-            })
-        })
-        .unwrap_or_else(|| raw_status.to_string());
-    Some(MutationOutcome {
-        path: normalize_rel_string(&path),
-        line,
-        status,
-        message,
-    })
-}
-
-fn cargo_mutants_scenario<T>(
-    object: &serde_json::Map<String, Value>,
-    f: impl FnOnce(&serde_json::Map<String, Value>) -> Option<T>,
-) -> Option<T> {
-    object
-        .get("scenario")
-        .and_then(Value::as_object)
-        .and_then(|scenario| {
-            scenario
-                .get("Mutant")
-                .or_else(|| scenario.get("mutant"))
-                .and_then(Value::as_object)
-        })
-        .and_then(f)
-}
-
-fn line_from_span(object: &serde_json::Map<String, Value>) -> Option<usize> {
-    object
-        .get("span")
-        .and_then(|span| span.get("start"))
-        .and_then(|start| start.get("line"))
-        .and_then(Value::as_u64)
-        .map(|line| line as usize)
-}
-
-fn normalize_mutation_status(status: &str) -> Option<String> {
-    let lower = status.to_ascii_lowercase().replace(['-', '_', ' '], "");
-    let normalized = match lower.as_str() {
-        "killed" | "caught" | "success" => "killed",
-        "survived" | "missed" | "nocoverage" => "survived",
-        "timeout" | "timedout" => "timeout",
-        "unviable" | "compileerror" | "error" | "runtimeerror" => "unviable",
-        "skipped" | "ignored" => "skipped",
-        _ => return None,
-    };
-    Some(normalized.into())
-}
-
 fn build_mutation_report(mutants: Vec<MutationOutcome>) -> MutationReport {
     let mut report = MutationReport {
         total: mutants.len(),
@@ -1352,12 +1121,6 @@ fn build_mutation_report(mutants: Vec<MutationOutcome>) -> MutationReport {
         }
     }
     report
-}
-
-fn string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
-        .map(ToString::to_string)
 }
 
 fn status_for_findings(findings: &[CoverageFinding]) -> String {
