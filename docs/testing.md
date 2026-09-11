@@ -60,6 +60,16 @@ checks validate imported data structure; they do not authenticate execution,
 producer identity or freshness. `coverage_input_integrity.rs` retains the
 malformed, truncated, duplicate-section and required-source refusal controls.
 
+Generic JSON summaries require a string `status`, an object `metrics`, and an
+array `findings`. Supported outcomes are `pass`, `warn`, `fail`, `error`,
+`missing`, `cancelled`, `timeout` and `incomplete`. A declared unsuccessful
+outcome remains a finding even if its finding list is empty. Each finding
+requires a nonempty `repair` (or `fix`); malformed findings and duplicate
+status or finding fields fail parsing. Required and strict sources retain
+blocking outcomes; advisory sources retain warnings. De-duplication and display
+limits cannot discard the strongest failure. `coverage_summary_integrity.rs`
+exercises these rules through the complete coverage audit entry point.
+
 ## Agent-friendly exception pattern
 
 Exceptions are the only sanctioned way to deviate from the audit baseline. They

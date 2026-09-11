@@ -15,6 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 mod lcov;
+mod summary;
 
 pub const DEFAULT_CONFIG_PATH: &str = "agent/coverage-sources.toml";
 pub const DEFAULT_JSON_PATH: &str = "target/jankurai/coverage/coverage-audit.json";
@@ -434,10 +435,16 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
                 }
             }
             CoverageFormat::GenericJsonSummary | CoverageFormat::JankuraiJson => {
-                match parse_generic_json_summary(&artifact_abs, opts.max_artifact_bytes) {
+                match summary::read(
+                    source,
+                    &artifact_abs,
+                    &artifact_rel,
+                    opts.max_artifact_bytes,
+                    opts.strict,
+                ) {
                     Ok((metrics, imported)) => {
                         result.metrics.extend(metrics);
-                        normalize_imported_findings(source, &artifact_rel, imported, opts.strict)
+                        imported
                     }
                     Err(err) => {
                         parser_error_findings(source, &artifact_rel, err.to_string(), opts.strict)
@@ -452,8 +459,8 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
         source_results.push(result);
     }
 
-    dedup_findings(&mut findings);
     sort_findings(&mut findings);
+    dedup_findings(&mut findings);
     cap_global_findings(&mut findings, opts.max_findings);
 
     let sources_present = source_results
@@ -1140,109 +1147,6 @@ fn analyze_hadolint(
         .collect()
 }
 
-fn parse_generic_json_summary(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<(BTreeMap<String, CoverageMetric>, Vec<Value>)> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse generic JSON summary")?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary must be an object"))?;
-    if !object.contains_key("status")
-        || !object.contains_key("metrics")
-        || !object.contains_key("findings")
-    {
-        bail!("generic-json-summary requires status, metrics, and findings");
-    }
-    let metrics = object
-        .get("metrics")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary metrics must be an object"))?
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let findings = object
-        .get("findings")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary findings must be an array"))?
-        .clone();
-    Ok((metrics, findings))
-}
-
-fn normalize_imported_findings(
-    source: &CoverageSource,
-    artifact: &str,
-    imported: Vec<Value>,
-    strict: bool,
-) -> Vec<CoverageFinding> {
-    imported
-        .into_iter()
-        .filter_map(|value| {
-            let object = value.as_object()?;
-            let repair = object
-                .get("repair")
-                .or_else(|| object.get("fix"))
-                .and_then(Value::as_str)?;
-            if repair.trim().is_empty() {
-                return None;
-            }
-            let mut severity = object
-                .get("severity")
-                .and_then(Value::as_str)
-                .unwrap_or("medium")
-                .to_ascii_lowercase();
-            if source.mode != CoverageMode::Required && !strict && is_hard(&severity) {
-                severity = "medium".into();
-            }
-            Some(CoverageFinding {
-                rule_id: normalize_rule_id(
-                    object
-                        .get("rule_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&primary_rule(source, "HLT-008-FALSE-GREEN-RISK")),
-                ),
-                severity: severity.clone(),
-                confidence: object
-                    .get("confidence")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_else(|| confidence_for_severity(&severity)),
-                source_id: source.id.clone(),
-                kind: source.kind.as_str().into(),
-                artifact: artifact.into(),
-                path: object
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or(artifact)
-                    .to_string(),
-                line: object
-                    .get("line")
-                    .and_then(Value::as_u64)
-                    .map(|line| line as usize),
-                message: object
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("generic coverage/proof finding")
-                    .to_string(),
-                evidence: object
-                    .get("evidence")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(ToString::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                repair: repair.to_string(),
-                owner: source.owner.clone(),
-                lane: source.lane.clone(),
-            })
-        })
-        .collect()
-}
-
 fn render_coverage_markdown(audit: &CoverageAudit) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -1499,11 +1403,12 @@ fn cap_global_findings(findings: &mut Vec<CoverageFinding>, max_findings: usize)
     }
     sort_findings(findings);
     let omitted = findings.len() - max_findings;
+    let omitted_severity = findings[max_findings].severity.clone();
     findings.truncate(max_findings);
     findings.push(CoverageFinding {
         rule_id: "HLT-008-FALSE-GREEN-RISK".into(),
-        severity: "info".into(),
-        confidence: 0.62,
+        confidence: confidence_for_severity(&omitted_severity),
+        severity: omitted_severity,
         source_id: "coverage-audit".into(),
         kind: "jankurai_artifact".into(),
         artifact: DEFAULT_JSON_PATH.into(),
