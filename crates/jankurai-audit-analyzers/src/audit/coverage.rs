@@ -10,8 +10,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+
+mod cargo_mutants;
+mod lcov;
+mod scanners;
+mod stryker;
+mod summary;
 
 pub const DEFAULT_CONFIG_PATH: &str = "agent/coverage-sources.toml";
 pub const DEFAULT_JSON_PATH: &str = "target/jankurai/coverage/coverage-audit.json";
@@ -302,6 +309,8 @@ pub fn load_coverage_config(repo_root: &Path, config_path: &Path) -> Result<Cove
         if !ids.insert(source.id.clone()) {
             bail!("duplicate coverage source id `{}`", source.id);
         }
+        globset_for(&source.applies_to)
+            .with_context(|| format!("invalid applies_to for coverage source `{}`", source.id))?;
     }
     Ok(config)
 }
@@ -431,10 +440,16 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
                 }
             }
             CoverageFormat::GenericJsonSummary | CoverageFormat::JankuraiJson => {
-                match parse_generic_json_summary(&artifact_abs, opts.max_artifact_bytes) {
+                match summary::read(
+                    source,
+                    &artifact_abs,
+                    &artifact_rel,
+                    opts.max_artifact_bytes,
+                    opts.strict,
+                ) {
                     Ok((metrics, imported)) => {
                         result.metrics.extend(metrics);
-                        normalize_imported_findings(source, &artifact_rel, imported, opts.strict)
+                        imported
                     }
                     Err(err) => {
                         parser_error_findings(source, &artifact_rel, err.to_string(), opts.strict)
@@ -449,8 +464,8 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
         source_results.push(result);
     }
 
-    dedup_findings(&mut findings);
     sort_findings(&mut findings);
+    dedup_findings(&mut findings);
     cap_global_findings(&mut findings, opts.max_findings);
 
     let sources_present = source_results
@@ -500,204 +515,23 @@ pub fn run_coverage_audit(opts: CoverageAuditOptions) -> Result<CoverageAudit> {
 }
 
 pub fn parse_lcov(path: &Path, max_bytes: u64) -> Result<LcovReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut report = LcovReport::default();
-    let mut current_path: Option<String> = None;
-    let mut current_file = LcovFile::default();
-
-    for (idx, raw_line) in text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with("TN:") {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("SF:") {
-            if let Some(path) = current_path.take() {
-                flush_lcov_file(&mut report, path, std::mem::take(&mut current_file));
-            }
-            if rest.trim().is_empty() {
-                bail!("malformed LCOV at line {line_no}: empty SF record");
-            }
-            current_path = Some(normalize_source_path(&repo_root, rest.trim()));
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("DA:") {
-            let Some(_) = current_path.as_ref() else {
-                bail!("malformed LCOV at line {line_no}: DA record before SF");
-            };
-            let mut parts = rest.split(',');
-            let Some(line_part) = parts.next() else {
-                bail!("malformed LCOV at line {line_no}: missing DA line");
-            };
-            let Some(count_part) = parts.next() else {
-                bail!("malformed LCOV at line {line_no}: missing DA count");
-            };
-            let source_line: usize = line_part
-                .parse()
-                .with_context(|| format!("malformed LCOV at line {line_no}: invalid DA line"))?;
-            let count: u64 = count_part
-                .parse()
-                .with_context(|| format!("malformed LCOV at line {line_no}: invalid DA count"))?;
-            current_file.lines.insert(source_line, count);
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("BRDA:") {
-            let fields = rest.split(',').collect::<Vec<_>>();
-            if fields.len() != 4 {
-                bail!("malformed LCOV at line {line_no}: invalid BRDA record");
-            }
-            report.total_branches += 1;
-            if fields[3] != "-" && fields[3].parse::<u64>().unwrap_or(0) > 0 {
-                report.covered_branches += 1;
-            }
-            continue;
-        }
-        if line == "end_of_record" {
-            let Some(path) = current_path.take() else {
-                bail!("malformed LCOV at line {line_no}: end_of_record before SF");
-            };
-            flush_lcov_file(&mut report, path, std::mem::take(&mut current_file));
-            continue;
-        }
-    }
-
-    if let Some(path) = current_path.take() {
-        report
-            .parser_warnings
-            .push("LCOV file ended without end_of_record; final record was accepted".into());
-        flush_lcov_file(&mut report, path, current_file);
-    }
-
-    if report.files.is_empty() {
-        bail!("LCOV report contains no source records");
-    }
-    Ok(report)
+    lcov::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_cargo_mutants_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse cargo-mutants JSON")?;
-    let mut outcomes = Vec::new();
-    collect_mutation_outcomes(&value, None, &mut outcomes);
-    Ok(build_mutation_report(outcomes))
+    cargo_mutants::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_stryker_json(path: &Path, max_bytes: u64) -> Result<MutationReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Stryker JSON")?;
-    let mut outcomes = Vec::new();
-    if let Some(files) = value.get("files").and_then(Value::as_object) {
-        for (file_path, file_value) in files {
-            if let Some(mutants) = file_value.get("mutants").and_then(Value::as_array) {
-                for mutant in mutants {
-                    if let Some(outcome) = mutation_outcome_from_value(mutant, Some(file_path)) {
-                        outcomes.push(outcome);
-                    }
-                }
-            }
-        }
-    }
-    if outcomes.is_empty() {
-        collect_mutation_outcomes(&value, None, &mut outcomes);
-    }
-    Ok(build_mutation_report(outcomes))
+    stryker::parse(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_trivy_json(path: &Path, max_bytes: u64) -> Result<SecurityReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Trivy JSON")?;
-    let mut report = SecurityReport::default();
-    for result in value
-        .get("Results")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let target = result
-            .get("Target")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_string();
-        for vuln in result
-            .get("Vulnerabilities")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let severity = vuln
-                .get("Severity")
-                .and_then(Value::as_str)
-                .unwrap_or("UNKNOWN")
-                .to_ascii_uppercase();
-            match severity.as_str() {
-                "CRITICAL" => report.critical += 1,
-                "HIGH" => report.high += 1,
-                "MEDIUM" => report.medium += 1,
-                "LOW" => report.low += 1,
-                _ => {}
-            }
-            report.vulnerabilities.push(SecurityIssue {
-                target: target.clone(),
-                vulnerability_id: vuln
-                    .get("VulnerabilityID")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                package_name: vuln
-                    .get("PkgName")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_string(),
-                severity,
-                title: vuln
-                    .get("Title")
-                    .or_else(|| vuln.get("Description"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("vulnerability reported by Trivy")
-                    .to_string(),
-            });
-        }
-    }
-    Ok(report)
+    scanners::trivy(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn parse_hadolint_json(path: &Path, max_bytes: u64) -> Result<ContainerLintReport> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse Hadolint JSON")?;
-    let items = value
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Hadolint JSON must be an array"))?;
-    let mut report = ContainerLintReport::default();
-    for item in items {
-        report.diagnostics.push(ContainerLintIssue {
-            file: item
-                .get("file")
-                .and_then(Value::as_str)
-                .unwrap_or("Dockerfile")
-                .to_string(),
-            line: item
-                .get("line")
-                .and_then(Value::as_u64)
-                .map(|line| line as usize),
-            code: item
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("hadolint")
-                .to_string(),
-            level: item
-                .get("level")
-                .and_then(Value::as_str)
-                .unwrap_or("info")
-                .to_ascii_lowercase(),
-            message: item
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Hadolint diagnostic")
-                .to_string(),
-        });
-    }
-    Ok(report)
+    scanners::hadolint(&read_bounded_text(path, max_bytes)?)
 }
 
 pub fn write_coverage_json(path: &Path, audit: &CoverageAudit) -> Result<()> {
@@ -1086,7 +920,6 @@ fn analyze_mutation(
     };
     relevant_survivors
         .into_iter()
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|mutant| CoverageFinding {
             rule_id: primary_rule(source, "HLT-008-FALSE-GREEN-RISK"),
             severity: severity.into(),
@@ -1142,7 +975,6 @@ fn analyze_security(
             (issue.severity == "CRITICAL" && report.critical >= critical_threshold)
                 || (issue.severity == "HIGH" && report.high >= high_threshold)
         })
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|issue| {
             let severity = if issue.severity == "CRITICAL" || source.mode == CoverageMode::Required || strict {
                 "high"
@@ -1182,7 +1014,6 @@ fn analyze_hadolint(
     report
         .diagnostics
         .iter()
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|issue| {
             let severity = match issue.level.as_str() {
                 "error" if source.mode == CoverageMode::Required || strict => "high",
@@ -1205,109 +1036,6 @@ fn analyze_hadolint(
                 owner: source.owner.clone(),
                 lane: source.lane.clone(),
             }
-        })
-        .collect()
-}
-
-fn parse_generic_json_summary(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<(BTreeMap<String, CoverageMetric>, Vec<Value>)> {
-    let text = read_bounded_text(path, max_bytes)?;
-    let value: Value = serde_json::from_str(&text).context("parse generic JSON summary")?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary must be an object"))?;
-    if !object.contains_key("status")
-        || !object.contains_key("metrics")
-        || !object.contains_key("findings")
-    {
-        bail!("generic-json-summary requires status, metrics, and findings");
-    }
-    let metrics = object
-        .get("metrics")
-        .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary metrics must be an object"))?
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let findings = object
-        .get("findings")
-        .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("generic-json-summary findings must be an array"))?
-        .clone();
-    Ok((metrics, findings))
-}
-
-fn normalize_imported_findings(
-    source: &CoverageSource,
-    artifact: &str,
-    imported: Vec<Value>,
-    strict: bool,
-) -> Vec<CoverageFinding> {
-    imported
-        .into_iter()
-        .filter_map(|value| {
-            let object = value.as_object()?;
-            let repair = object
-                .get("repair")
-                .or_else(|| object.get("fix"))
-                .and_then(Value::as_str)?;
-            if repair.trim().is_empty() {
-                return None;
-            }
-            let mut severity = object
-                .get("severity")
-                .and_then(Value::as_str)
-                .unwrap_or("medium")
-                .to_ascii_lowercase();
-            if source.mode != CoverageMode::Required && !strict && is_hard(&severity) {
-                severity = "medium".into();
-            }
-            Some(CoverageFinding {
-                rule_id: normalize_rule_id(
-                    object
-                        .get("rule_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&primary_rule(source, "HLT-008-FALSE-GREEN-RISK")),
-                ),
-                severity: severity.clone(),
-                confidence: object
-                    .get("confidence")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_else(|| confidence_for_severity(&severity)),
-                source_id: source.id.clone(),
-                kind: source.kind.as_str().into(),
-                artifact: artifact.into(),
-                path: object
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .unwrap_or(artifact)
-                    .to_string(),
-                line: object
-                    .get("line")
-                    .and_then(Value::as_u64)
-                    .map(|line| line as usize),
-                message: object
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("generic coverage/proof finding")
-                    .to_string(),
-                evidence: object
-                    .get("evidence")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(ToString::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-                repair: repair.to_string(),
-                owner: source.owner.clone(),
-                lane: source.lane.clone(),
-            })
         })
         .collect()
 }
@@ -1375,140 +1103,6 @@ fn render_coverage_markdown(audit: &CoverageAudit) -> String {
     out
 }
 
-fn flush_lcov_file(report: &mut LcovReport, path: String, file: LcovFile) {
-    report.total_lines += file.lines.len();
-    report.covered_lines += file.lines.values().filter(|count| **count > 0).count();
-    report.files.insert(path, file);
-}
-
-fn collect_mutation_outcomes(
-    value: &Value,
-    parent_path: Option<&str>,
-    outcomes: &mut Vec<MutationOutcome>,
-) {
-    if let Some(outcome) = mutation_outcome_from_value(value, parent_path) {
-        outcomes.push(outcome);
-    }
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                collect_mutation_outcomes(item, parent_path, outcomes);
-            }
-        }
-        Value::Object(object) => {
-            for (key, child) in object {
-                let next_parent = if key.ends_with(".rs")
-                    || key.ends_with(".ts")
-                    || key.ends_with(".tsx")
-                    || key.ends_with(".js")
-                {
-                    Some(key.as_str())
-                } else {
-                    parent_path
-                };
-                collect_mutation_outcomes(child, next_parent, outcomes);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn mutation_outcome_from_value(
-    value: &Value,
-    parent_path: Option<&str>,
-) -> Option<MutationOutcome> {
-    let object = value.as_object()?;
-    let raw_status = object
-        .get("status")
-        .or_else(|| object.get("summary"))
-        .or_else(|| object.get("outcome"))
-        .or_else(|| object.get("result"))
-        .and_then(Value::as_str)?;
-    let status = normalize_mutation_status(raw_status)?;
-    let path = string_field(object, &["path", "file", "filename", "source_file"])
-        .or_else(|| {
-            object
-                .get("mutant")
-                .and_then(Value::as_object)
-                .and_then(|object| {
-                    string_field(object, &["path", "file", "filename", "source_file"])
-                })
-        })
-        .or_else(|| {
-            cargo_mutants_scenario(object, |mutant| {
-                string_field(mutant, &["path", "file", "filename", "source_file"])
-            })
-        })
-        .or_else(|| parent_path.map(ToString::to_string))
-        .unwrap_or_default();
-    let line = object
-        .get("line")
-        .or_else(|| object.get("start_line"))
-        .and_then(Value::as_u64)
-        .map(|line| line as usize)
-        .or_else(|| line_from_span(object))
-        .or_else(|| cargo_mutants_scenario(object, line_from_span))
-        .or_else(|| {
-            object
-                .get("location")
-                .and_then(|location| location.get("start"))
-                .and_then(|start| start.get("line"))
-                .and_then(Value::as_u64)
-                .map(|line| line as usize)
-        });
-    let message = string_field(object, &["name", "mutatorName", "description", "id"])
-        .or_else(|| {
-            cargo_mutants_scenario(object, |mutant| {
-                string_field(mutant, &["name", "mutatorName", "description", "id"])
-            })
-        })
-        .unwrap_or_else(|| raw_status.to_string());
-    Some(MutationOutcome {
-        path: normalize_rel_string(&path),
-        line,
-        status,
-        message,
-    })
-}
-
-fn cargo_mutants_scenario<T>(
-    object: &serde_json::Map<String, Value>,
-    f: impl FnOnce(&serde_json::Map<String, Value>) -> Option<T>,
-) -> Option<T> {
-    object
-        .get("scenario")
-        .and_then(Value::as_object)
-        .and_then(|scenario| {
-            scenario
-                .get("Mutant")
-                .or_else(|| scenario.get("mutant"))
-                .and_then(Value::as_object)
-        })
-        .and_then(f)
-}
-
-fn line_from_span(object: &serde_json::Map<String, Value>) -> Option<usize> {
-    object
-        .get("span")
-        .and_then(|span| span.get("start"))
-        .and_then(|start| start.get("line"))
-        .and_then(Value::as_u64)
-        .map(|line| line as usize)
-}
-
-fn normalize_mutation_status(status: &str) -> Option<String> {
-    let lower = status.to_ascii_lowercase().replace(['-', '_', ' '], "");
-    let normalized = match lower.as_str() {
-        "killed" | "caught" | "success" => "killed",
-        "survived" | "missed" | "nocoverage" => "survived",
-        "timeout" | "timedout" => "timeout",
-        "unviable" | "compileerror" | "error" | "runtimeerror" => "unviable",
-        "skipped" | "ignored" => "skipped",
-        _ => return None,
-    };
-    Some(normalized.into())
-}
-
 fn build_mutation_report(mutants: Vec<MutationOutcome>) -> MutationReport {
     let mut report = MutationReport {
         total: mutants.len(),
@@ -1526,12 +1120,6 @@ fn build_mutation_report(mutants: Vec<MutationOutcome>) -> MutationReport {
         }
     }
     report
-}
-
-fn string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str))
-        .map(ToString::to_string)
 }
 
 fn status_for_findings(findings: &[CoverageFinding]) -> String {
@@ -1574,11 +1162,12 @@ fn cap_global_findings(findings: &mut Vec<CoverageFinding>, max_findings: usize)
     }
     sort_findings(findings);
     let omitted = findings.len() - max_findings;
+    let omitted_severity = findings[max_findings].severity.clone();
     findings.truncate(max_findings);
     findings.push(CoverageFinding {
         rule_id: "HLT-008-FALSE-GREEN-RISK".into(),
-        severity: "info".into(),
-        confidence: 0.62,
+        confidence: confidence_for_severity(&omitted_severity),
+        severity: omitted_severity,
         source_id: "coverage-audit".into(),
         kind: "jankurai_artifact".into(),
         artifact: DEFAULT_JSON_PATH.into(),
@@ -1698,12 +1287,16 @@ fn auto_source_enabled(repo_root: &Path, source: &CoverageSource) -> Result<bool
     for entry in walkdir::WalkDir::new(repo_root)
         .into_iter()
         .filter_entry(|entry| entry.file_name() != ".git" && entry.file_name() != "target")
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
     {
+        let entry = entry.context("incomplete coverage analysis: discover applicable source")?;
         let rel = display_rel(repo_root, entry.path());
         if matcher.is_match(rel.as_str()) {
-            return Ok(true);
+            if entry.file_type().is_symlink() {
+                bail!("incomplete coverage analysis: applicable source is a symlink: {rel}");
+            }
+            if entry.file_type().is_file() {
+                return Ok(true);
+            }
         }
     }
     Ok(false)
@@ -1789,21 +1382,41 @@ fn parse_changed_lines_diff(diff: &str) -> BTreeMap<String, BTreeSet<usize>> {
 }
 
 fn read_bounded_text(path: &Path, max_bytes: u64) -> Result<String> {
-    let metadata = fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    let read_limit = max_bytes
+        .checked_add(1)
+        .context("invalid artifact byte limit")?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("inspect coverage input {}", path.display()))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        bail!(
+            "coverage input must be a nonempty regular file: {}",
+            path.display()
+        );
+    }
     if metadata.len() > max_bytes {
         bail!(
-            "artifact {} is {} bytes, above max_artifact_bytes {}",
+            "artifact {} exceeds max_artifact_bytes {}",
             path.display(),
-            metadata.len(),
             max_bytes
         );
     }
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    if bytes.len() as u64 > max_bytes {
+    let file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    let after = file
+        .metadata()
+        .with_context(|| format!("inspect open input {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes
+        || bytes.len() as u64 != metadata.len()
+        || after.len() != metadata.len()
+        || after.modified()? != metadata.modified()?
+    {
         bail!(
-            "artifact {} exceeded max_artifact_bytes {} while reading",
-            path.display(),
-            max_bytes
+            "coverage input changed or exceeded its byte limit while reading: {}",
+            path.display()
         );
     }
     String::from_utf8(bytes).with_context(|| format!("{} is not valid UTF-8", path.display()))
