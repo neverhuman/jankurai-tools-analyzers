@@ -162,3 +162,25 @@ fn malformed_vite_config_blocks_complete_analysis_and_retains_diagnostic_finding
         .iter()
         .any(|hit| hit.matched_term == "websec.input.incomplete"));
 }
+
+#[test]
+fn valid_but_truncated_prefixes_cannot_report_complete_analysis() {
+    for (path, source) in [
+        ("src/a.ts", "export const safe = true;"),
+        ("src/lib.rs", "pub fn safe() {}"),
+        ("vite.config.ts", "export default {};"),
+    ] {
+        let mut ctx = context(path, source);
+        assert!(ast::run_ast_pilot(&ctx).is_ok());
+        ctx.all_files[0].size += 1;
+        ctx.scope_files[0].size += 1;
+        let error = ast::run_ast_pilot(&ctx).unwrap_err();
+        assert!(error.to_string().contains("incomplete analysis"), "{path}");
+        if path == "vite.config.ts" {
+            assert!(web_security::validate_inputs(&ctx).is_err());
+            assert!(web_security::findings(&ctx)
+                .iter()
+                .any(|hit| hit.matched_term == "websec.input.incomplete"));
+        }
+    }
+}

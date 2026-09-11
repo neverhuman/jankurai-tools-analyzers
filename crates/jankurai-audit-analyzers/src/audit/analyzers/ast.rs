@@ -49,11 +49,13 @@ pub fn run_ast_pilot(ctx: &AuditContext) -> Result<Vec<FindingHit>> {
 
     for file in product_code_files(ctx) {
         if file.suffix == ".rs" {
+            crate::audit::syntax::require_complete(file)?;
             parse_rust_imports(&file.rel_path, &file.text, &mut graph)?;
         } else if matches!(
             file.suffix.as_str(),
             ".ts" | ".tsx" | ".mts" | ".cts" | ".js" | ".jsx" | ".mjs" | ".cjs"
         ) {
+            crate::audit::syntax::require_complete(file)?;
             parse_typescript_imports(&file.rel_path, &file.text, &mut graph)?;
         }
     }

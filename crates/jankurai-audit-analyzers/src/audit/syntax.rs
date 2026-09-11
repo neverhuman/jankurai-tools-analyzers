@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use jankurai_audit_kernel::model::FileInfo;
 use oxc_allocator::Allocator;
 use oxc_ast::ast::Program;
 use oxc_parser::Parser;
@@ -30,4 +31,17 @@ pub(super) fn line(source: &str, offset: u32) -> usize {
         .filter(|byte| **byte == b'\n')
         .count()
         + 1
+}
+
+/// A syntactically valid prefix is still an incomplete required input.
+pub(super) fn require_complete(file: &FileInfo) -> Result<()> {
+    if file.size != file.text.len() as u64 {
+        bail!(
+            "incomplete analysis: {} captured {} of {} input bytes",
+            file.rel_path,
+            file.text.len(),
+            file.size
+        );
+    }
+    Ok(())
 }

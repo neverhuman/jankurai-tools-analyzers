@@ -10,7 +10,8 @@ computed literal keys, CommonJS exports and multiline values. Unrelated objects
 and strings are not configuration. These checks do not execute configuration or
 resolve arbitrary runtime values.
 
-Malformed required syntax returns an incomplete-analysis error before the AST
+Captured byte counts must match the original required input, even when the prefix
+parses successfully. Malformed required syntax returns an incomplete-analysis error before the AST
 pilot can supply findings. Consumers must propagate the result from
 `run_ast_pilot`; a parse failure must not become an empty successful analysis.
 Vite's standalone diagnostic findings also retain the parse failure.

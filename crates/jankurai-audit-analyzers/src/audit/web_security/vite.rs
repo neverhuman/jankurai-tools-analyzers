@@ -5,6 +5,7 @@ use oxc_ast::ast::{AssignmentTarget, Expression, ObjectProperty, Statement};
 use oxc_ast_visit::{walk, Visit};
 
 pub(super) fn findings(file: &FileInfo) -> Result<Vec<LanguageFinding>> {
+    syntax::require_complete(file)?;
     syntax::javascript(&file.rel_path, &file.text, |program| {
         let mut visitor = Properties {
             file,
