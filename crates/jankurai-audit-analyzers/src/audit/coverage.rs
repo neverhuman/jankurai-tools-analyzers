@@ -309,6 +309,8 @@ pub fn load_coverage_config(repo_root: &Path, config_path: &Path) -> Result<Cove
         if !ids.insert(source.id.clone()) {
             bail!("duplicate coverage source id `{}`", source.id);
         }
+        globset_for(&source.applies_to)
+            .with_context(|| format!("invalid applies_to for coverage source `{}`", source.id))?;
     }
     Ok(config)
 }
@@ -918,7 +920,6 @@ fn analyze_mutation(
     };
     relevant_survivors
         .into_iter()
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|mutant| CoverageFinding {
             rule_id: primary_rule(source, "HLT-008-FALSE-GREEN-RISK"),
             severity: severity.into(),
@@ -974,7 +975,6 @@ fn analyze_security(
             (issue.severity == "CRITICAL" && report.critical >= critical_threshold)
                 || (issue.severity == "HIGH" && report.high >= high_threshold)
         })
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|issue| {
             let severity = if issue.severity == "CRITICAL" || source.mode == CoverageMode::Required || strict {
                 "high"
@@ -1014,7 +1014,6 @@ fn analyze_hadolint(
     report
         .diagnostics
         .iter()
-        .take(PER_SOURCE_FINDINGS_CAP)
         .map(|issue| {
             let severity = match issue.level.as_str() {
                 "error" if source.mode == CoverageMode::Required || strict => "high",

@@ -74,6 +74,19 @@ fn artifact_reads_require_regular_bounded_nonempty_utf8_inputs() {
 }
 
 #[test]
+fn malformed_source_globs_fail_before_evidence_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("coverage.toml");
+    for mode in ["required", "advisory", "disabled", "auto"] {
+        fs::write(&path, format!("version = 1\n[[source]]\nid = 'rust'\nkind = 'line_coverage'\nformat = 'lcov'\nmode = '{mode}'\nowner = 'tools'\nlane = 'coverage-audit'\nartifacts = ['lcov.info']\napplies_to = ['[']\nrules = ['HLT-008-FALSE-GREEN-RISK']\n")).unwrap();
+        assert!(
+            coverage::load_coverage_config(root.path(), &path).is_err(),
+            "{mode}"
+        );
+    }
+}
+
+#[test]
 fn required_audit_retains_a_hard_parser_finding_for_truncated_coverage() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("coverage.toml"), "version = 1\n[[source]]\nid = 'rust'\nkind = 'line_coverage'\nformat = 'lcov'\nmode = 'required'\nowner = 'tools'\nlane = 'coverage-audit'\nartifacts = ['lcov.info']\napplies_to = ['src/**/*.rs']\nrules = ['HLT-008-FALSE-GREEN-RISK']\n").unwrap();

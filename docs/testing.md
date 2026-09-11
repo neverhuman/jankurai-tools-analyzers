@@ -89,6 +89,10 @@ Hadolint accepts an empty diagnostic list, but every present diagnostic must
 have a valid location, level, code and message. `coverage_scanner_integrity.rs`
 retains positive and malformed-input controls for these formats.
 
+Coverage source globs are validated before selecting evidence. Display limits
+apply after all input findings have been classified and sorted, so a blocking
+diagnostic late in a report cannot disappear behind earlier informational ones.
+
 ## Agent-friendly exception pattern
 
 Exceptions are the only sanctioned way to deviate from the audit baseline. They

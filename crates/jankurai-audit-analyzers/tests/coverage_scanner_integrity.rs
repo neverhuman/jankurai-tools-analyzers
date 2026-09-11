@@ -1,6 +1,40 @@
 use jankurai_audit_analyzers::audit::coverage;
 use serde_json::json;
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[test]
+fn late_blocking_diagnostics_survive_display_limits() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("coverage.toml"), "version = 1\n[[source]]\nid = 'docker'\nkind = 'container'\nformat = 'hadolint-json'\nmode = 'required'\nowner = 'tools'\nlane = 'coverage-audit'\nartifacts = ['report.json']\napplies_to = ['**/Dockerfile']\nrules = ['HLT-032-DOCKER-BAD-BEHAVIOR']\n").unwrap();
+    let diagnostics: Vec<_> = (1..=51).map(|line| json!({"file": "Dockerfile", "line": line, "code": "DL3008", "level": if line == 51 {"error"} else {"info"}, "message": "Pin package versions"})).collect();
+    fs::write(
+        root.path().join("report.json"),
+        serde_json::to_vec(&diagnostics).unwrap(),
+    )
+    .unwrap();
+    let report = coverage::run_coverage_audit(coverage::CoverageAuditOptions {
+        repo_root: root.path().into(),
+        config_path: PathBuf::from("coverage.toml"),
+        changed_from: None,
+        strict: false,
+        max_artifact_bytes: 20_000,
+        max_findings: 200,
+    })
+    .unwrap();
+    assert_eq!(report.summary.status, "fail");
+    assert!(report
+        .findings
+        .iter()
+        .any(|finding| finding.line == Some(51) && finding.severity == "high"));
+    assert!(report
+        .findings
+        .iter()
+        .any(|finding| finding.message.contains("omitted by per-source cap")));
+    assert_eq!(report.sources[0].metrics["diagnostics"], 51);
+}
 
 fn input<T>(text: &str, parse: impl FnOnce(&Path, u64) -> anyhow::Result<T>) -> anyhow::Result<T> {
     let root = tempfile::tempdir()?;
