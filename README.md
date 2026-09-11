@@ -4,35 +4,35 @@
 [![Jankurai score: 94/100](agent/jankurai-badge.svg)](agent/jankurai-badge.json)
 <!-- jankurai-badge:end -->
 
+Historical score from the committed [baseline report](agent/baselines/main.repo-score.json)
+and [auditor metadata](agent/jankurai-badge.json).
+
 [![CI](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/neverhuman/jankurai-tools-analyzers/actions/workflows/ci.yml)
 
 Dimension analyzers and scoring suite for the **jankurai** audit standard. This
 repository is one member of the Jankurai split family; read [`SPLIT.md`](SPLIT.md)
 for the family contract and [`AGENTS.md`](AGENTS.md) for agent routing rules.
 
-## Stack
+## Contributor setup
 
-Rust core + TypeScript/React/Vite product surface + PostgreSQL truth + generated
-contracts + exception-only Python AI/data service. This repository is the
-Rust-first analyzer crate that was extracted from `jankurai-core`; see
-[`docs/architecture.md`](docs/architecture.md).
+This repository supplies native language, web-security and repository-health detectors to
+[Jankurai](https://github.com/neverhuman/jankurai). For binary installation,
+your first audit, and the complete family build, start at the hub.
 
-## Quick start
+Install Rust **1.97.1**, a native compiler/linker and Node.js **24** for CI
+control tests. Then run the crate's contributor checks:
 
-```bash
-# One-command setup (toolchain + locked dependencies).
-just setup
-
-# Deterministic fast lane (check + tests).
-just fast
-
-# Full local check: format, lint, fast, security, and self-audit.
-just check
+```sh
+cargo fetch --locked
+cargo test --workspace --locked
+bash scripts/ci-local.sh required
 ```
 
-The full command surface lives in the root [`Justfile`](Justfile). Continuous
-integration runs the same lanes under
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+The native library does not need Node.js at runtime. The complete quality lane
+also needs the pinned security tools and auditor installed by the owning CI
+setup; see [testing](docs/testing.md) and
+[the workflow](.github/workflows/ci.yml). Local recipes are in the
+[Justfile](Justfile).
 
 ## Layout
 
@@ -49,6 +49,7 @@ integration runs the same lanes under
 
 - [Architecture](docs/architecture.md)
 - [Testing](docs/testing.md)
+- [Native semantic analysis and input integrity](docs/semantic-analysis.md)
 - [Boundaries](docs/boundaries.md)
 - [Release process](docs/release.md)
 - [Agent exceptions and overrides](docs/exceptions.md)
