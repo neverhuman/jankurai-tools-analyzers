@@ -10,6 +10,7 @@ use regex::Regex;
 
 mod storage;
 mod storage_tokens;
+mod vite;
 
 const HLT_RULE_ID: &str = "HLT-039-WEB-SECURITY-BAD-BEHAVIOR";
 
@@ -41,7 +42,19 @@ fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
     let mut out = Vec::new();
     for file in ctx.all_files.iter().filter(|file| !excluded(file)) {
         if is_vite_config(file) {
-            out.extend(vite_config_hits(file));
+            match vite::findings(file) {
+                Ok(hits) => out.extend(hits),
+                Err(error) => out.push(finding(
+                    HLT_RULE_ID,
+                    "websec.input.incomplete",
+                    file,
+                    1,
+                    error.to_string(),
+                    "Vite configuration could not be completely parsed",
+                    "repair the input syntax and rerun the complete audit",
+                    ProofWindow::None,
+                )),
+            }
         }
         if is_env_or_client_source(file) {
             out.extend(vite_env_secret_hits(file));
@@ -54,6 +67,19 @@ fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
         }
     }
     out
+}
+
+/// The full audit calls this before scoring; an invalid required configuration
+/// cannot become a complete report with an empty set of findings.
+pub fn validate_inputs(ctx: &AuditContext) -> anyhow::Result<()> {
+    for file in ctx
+        .all_files
+        .iter()
+        .filter(|file| !excluded(file) && is_vite_config(file))
+    {
+        vite::findings(file)?;
+    }
+    Ok(())
 }
 
 fn advisory_hits(ctx: &AuditContext) -> Vec<LanguageFinding> {
@@ -84,6 +110,8 @@ fn is_vite_config(file: &FileInfo) -> bool {
         || lower.ends_with("vite.config.js")
         || lower.ends_with("vite.config.mts")
         || lower.ends_with("vite.config.cts")
+        || lower.ends_with("vite.config.mjs")
+        || lower.ends_with("vite.config.cjs")
 }
 
 fn is_env_or_client_source(file: &FileInfo) -> bool {
@@ -163,43 +191,6 @@ fn is_script_or_html(lower_path: &str) -> bool {
         || lower_path.ends_with(".mjs")
         || lower_path.ends_with(".cjs")
         || lower_path.ends_with(".html")
-}
-
-fn vite_config_hits(file: &FileInfo) -> Vec<LanguageFinding> {
-    let mut out = Vec::new();
-    for (idx, raw_line) in file.text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = strip_comments_for_line_language(raw_line, "ts");
-        let lower = line.to_ascii_lowercase();
-        if lower.is_empty() || nearby_allow(&file.text, line_no, "websec.vite.public-dev-server") {
-            continue;
-        }
-        let compact = lower.split_whitespace().collect::<String>();
-        let broad_allowed_hosts = compact.contains("allowedhosts:true");
-        let broad_host = compact.contains("host:true")
-            || lower.contains("host: \"0.0.0.0\"")
-            || lower.contains("host: '0.0.0.0'")
-            || lower.contains("host: `0.0.0.0`")
-            || lower.contains("host: \"::\"")
-            || lower.contains("host: '::'")
-            || lower.contains("host: `::`");
-        let broad_cors = compact.contains("cors:true");
-        let loose_fs =
-            compact.contains("strict:false") && nearby_text(file, line_no, 3).contains("fs");
-        if broad_allowed_hosts || broad_host || broad_cors || loose_fs {
-            out.push(finding(
-                HLT_RULE_ID,
-                "websec.vite.public-dev-server",
-                file,
-                line_no,
-                "Vite dev or preview server is configured with broad network exposure",
-                "Vite dev-server exposure can disclose source or enable host-header and CORS abuse",
-                "bind Vite to localhost, use explicit allowedHosts and origins, and keep server.fs.strict enabled",
-                ProofWindow::None,
-            ));
-        }
-    }
-    out
 }
 
 fn vite_env_secret_hits(file: &FileInfo) -> Vec<LanguageFinding> {

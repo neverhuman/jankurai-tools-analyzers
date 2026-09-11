@@ -14,6 +14,7 @@ pub mod coverage;
 pub mod proofbind_artifact;
 pub mod repo_rot;
 pub mod security_artifact;
+mod syntax;
 pub mod unnecessary_variety;
 pub mod ux_artifact;
 pub mod web_security;

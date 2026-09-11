@@ -119,9 +119,9 @@ fn repo_rot_accepts_structurally_governed_versioned_contract_pair() {
     let findings = repo_rot::findings(&context);
 
     assert_eq!(repo_rot::summary(&context).hard_findings, 0);
-    assert!(findings.iter().all(|finding| {
-        finding.matched_term != "repo-rot.path.fake-versioned-source"
-    }));
+    assert!(findings
+        .iter()
+        .all(|finding| { finding.matched_term != "repo-rot.path.fake-versioned-source" }));
 }
 
 #[test]
