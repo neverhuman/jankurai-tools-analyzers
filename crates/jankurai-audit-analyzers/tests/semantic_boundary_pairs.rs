@@ -137,6 +137,21 @@ fn vite_property_syntax_and_whitespace_cannot_hide_public_exposure() {
         [3]
     );
     assert!(!vite_hits("vite.config.cjs", "module.exports = {server:{host:true}};").is_empty());
+    assert!(!vite_hits(
+        "packages/web/vite.config.ts",
+        "export default {server:{host:true}};"
+    )
+    .is_empty());
+    for path in [
+        "not-vite.config.ts",
+        "vite.config.ts.notes",
+        "src/invite.config.js",
+    ] {
+        assert!(
+            vite_hits(path, "export default {server:{host:true}};").is_empty(),
+            "{path}"
+        );
+    }
 }
 
 #[test]

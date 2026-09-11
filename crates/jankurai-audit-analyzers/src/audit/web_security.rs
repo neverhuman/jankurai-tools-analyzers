@@ -105,13 +105,15 @@ fn excluded(file: &FileInfo) -> bool {
 }
 
 fn is_vite_config(file: &FileInfo) -> bool {
-    let lower = file.rel_path.to_ascii_lowercase();
-    lower.ends_with("vite.config.ts")
-        || lower.ends_with("vite.config.js")
-        || lower.ends_with("vite.config.mts")
-        || lower.ends_with("vite.config.cts")
-        || lower.ends_with("vite.config.mjs")
-        || lower.ends_with("vite.config.cjs")
+    matches!(
+        file.name.to_ascii_lowercase().as_str(),
+        "vite.config.ts"
+            | "vite.config.js"
+            | "vite.config.mts"
+            | "vite.config.cts"
+            | "vite.config.mjs"
+            | "vite.config.cjs"
+    )
 }
 
 fn is_env_or_client_source(file: &FileInfo) -> bool {
