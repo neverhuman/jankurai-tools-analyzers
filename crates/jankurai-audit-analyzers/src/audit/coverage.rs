@@ -1,11 +1,11 @@
+use anyhow::{bail, Context, Result};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use jankurai_audit_kernel::audit::finding_builder::{
     confidence_for_severity, finding_fingerprint, hardness_for_severity, rerun_command_for_lane,
 };
 use jankurai_audit_kernel::audit::rules;
 use jankurai_audit_kernel::model::{CoverageEvidenceSummary, Finding};
 use jankurai_audit_kernel::validation::{self, ArtifactSchema};
-use anyhow::{bail, Context, Result};
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};

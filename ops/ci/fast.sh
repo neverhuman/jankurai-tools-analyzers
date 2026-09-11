@@ -7,5 +7,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT"
 
 log "fast lane: cargo check + nextest"
+cargo fmt --all --check
 cargo check --workspace --locked
-cargo nextest run --workspace
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo nextest run --workspace --locked

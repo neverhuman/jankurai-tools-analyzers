@@ -1,8 +1,10 @@
+use anyhow::Result;
 use jankurai_audit_kernel::audit::helpers::product_code_files;
 use jankurai_audit_kernel::audit::helpers::AuditContext;
 use jankurai_audit_kernel::audit::scan::FindingHit;
-use once_cell::sync::Lazy;
-use regex::Regex;
+
+mod rust_imports;
+mod typescript_imports;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone)]
@@ -29,48 +31,32 @@ impl DependencyGraph {
     }
 }
 
-pub fn parse_rust_imports(file_path: &str, text: &str, graph: &mut DependencyGraph) {
-    static RUST_USE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*use\s+([a-zA-Z0-9_:]+)").unwrap());
-    for (i, line) in text.lines().enumerate() {
-        if let Some(caps) = RUST_USE.captures(line) {
-            if let Some(m) = caps.get(1) {
-                let target_module = m.as_str().to_string();
-                graph.add_edge(ImportEdge {
-                    source_file: file_path.to_string(),
-                    target_module,
-                    line_number: i + 1,
-                });
-            }
-        }
-    }
+pub fn parse_rust_imports(file_path: &str, text: &str, graph: &mut DependencyGraph) -> Result<()> {
+    rust_imports::parse(file_path, text, graph)
 }
 
-pub fn parse_typescript_imports(file_path: &str, text: &str, graph: &mut DependencyGraph) {
-    // Basic match: import { ... } from 'module'; or import x from 'module';
-    static TS_IMPORT: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"^\s*import\s+.*from\s+['"]([^'"]+)['"]"#).unwrap());
-    for (i, line) in text.lines().enumerate() {
-        if let Some(caps) = TS_IMPORT.captures(line) {
-            if let Some(m) = caps.get(1) {
-                let target_module = m.as_str().to_string();
-                graph.add_edge(ImportEdge {
-                    source_file: file_path.to_string(),
-                    target_module,
-                    line_number: i + 1,
-                });
-            }
-        }
-    }
+pub fn parse_typescript_imports(
+    file_path: &str,
+    text: &str,
+    graph: &mut DependencyGraph,
+) -> Result<()> {
+    typescript_imports::parse(file_path, text, graph)
 }
 
-pub fn run_ast_pilot(ctx: &AuditContext) -> Vec<FindingHit> {
+pub fn run_ast_pilot(ctx: &AuditContext) -> Result<Vec<FindingHit>> {
+    crate::audit::web_security::validate_inputs(ctx)?;
     let mut graph = DependencyGraph::default();
 
     for file in product_code_files(ctx) {
         if file.suffix == ".rs" {
-            parse_rust_imports(&file.rel_path, &file.text, &mut graph);
-        } else if file.suffix == ".ts" || file.suffix == ".tsx" {
-            parse_typescript_imports(&file.rel_path, &file.text, &mut graph);
+            crate::audit::syntax::require_complete(&file)?;
+            parse_rust_imports(&file.rel_path, &file.text, &mut graph)?;
+        } else if matches!(
+            file.suffix.as_str(),
+            ".ts" | ".tsx" | ".mts" | ".cts" | ".js" | ".jsx" | ".mjs" | ".cjs"
+        ) {
+            crate::audit::syntax::require_complete(&file)?;
+            parse_typescript_imports(&file.rel_path, &file.text, &mut graph)?;
         }
     }
 
@@ -82,7 +68,9 @@ pub fn run_ast_pilot(ctx: &AuditContext) -> Vec<FindingHit> {
         if edge.source_file.starts_with("crates/domain/") || edge.source_file.starts_with("domain/")
         {
             for forbidden in domain_forbidden {
-                if edge.target_module.starts_with(forbidden) || edge.target_module == *forbidden {
+                if edge.target_module == *forbidden
+                    || edge.target_module.starts_with(&format!("{forbidden}::"))
+                {
                     hits.push(FindingHit {
                         path: edge.source_file.clone(),
                         line: Some(edge.line_number),
@@ -96,10 +84,7 @@ pub fn run_ast_pilot(ctx: &AuditContext) -> Vec<FindingHit> {
         }
 
         // TypeScript UI layer checking for backend imports
-        if (edge.source_file.starts_with("apps/web/") || edge.source_file.starts_with("frontend/"))
-            && (edge.target_module.contains("backend")
-                || edge.target_module.contains("adapters/db"))
-        {
+        if is_ui_source(&edge.source_file) && is_backend_module(&edge.target_module) {
             hits.push(FindingHit {
                 path: edge.source_file.clone(),
                 line: Some(edge.line_number),
@@ -116,5 +101,25 @@ pub fn run_ast_pilot(ctx: &AuditContext) -> Vec<FindingHit> {
         }
     }
 
-    hits
+    Ok(hits)
+}
+
+fn is_ui_source(path: &str) -> bool {
+    [
+        "apps/web/",
+        "frontend/",
+        "ui/",
+        "packages/web/",
+        "packages/ui/",
+        "src/components/",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
+        || path.ends_with(".tsx")
+        || path.ends_with(".jsx")
+}
+
+fn is_backend_module(module: &str) -> bool {
+    let segments: Vec<_> = module.split('/').collect();
+    segments.contains(&"backend") || segments.windows(2).any(|pair| pair == ["adapters", "db"])
 }

@@ -8,6 +8,10 @@ use jankurai_audit_kernel::model::FileInfo;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+mod storage;
+mod storage_tokens;
+mod vite;
+
 const HLT_RULE_ID: &str = "HLT-039-WEB-SECURITY-BAD-BEHAVIOR";
 
 static VITE_ENV_RE: Lazy<Regex> =
@@ -38,19 +42,44 @@ fn hard_findings(ctx: &AuditContext) -> Vec<LanguageFinding> {
     let mut out = Vec::new();
     for file in ctx.all_files.iter().filter(|file| !excluded(file)) {
         if is_vite_config(file) {
-            out.extend(vite_config_hits(file));
+            match vite::findings(file) {
+                Ok(hits) => out.extend(hits),
+                Err(error) => out.push(finding(
+                    HLT_RULE_ID,
+                    "websec.input.incomplete",
+                    file,
+                    1,
+                    error.to_string(),
+                    "Vite configuration could not be completely parsed",
+                    "repair the input syntax and rerun the complete audit",
+                    ProofWindow::None,
+                )),
+            }
         }
         if is_env_or_client_source(file) {
             out.extend(vite_env_secret_hits(file));
         }
         if is_browser_source(file) {
-            out.extend(browser_storage_hits(file));
+            out.extend(storage::findings(file));
         }
         if is_cors_surface(file) {
             out.extend(credentialed_wildcard_cors_hits(file));
         }
     }
     out
+}
+
+/// The full audit calls this before scoring; an invalid required configuration
+/// cannot become a complete report with an empty set of findings.
+pub fn validate_inputs(ctx: &AuditContext) -> anyhow::Result<()> {
+    for file in ctx
+        .all_files
+        .iter()
+        .filter(|file| !excluded(file) && is_vite_config(file))
+    {
+        vite::findings(file)?;
+    }
+    Ok(())
 }
 
 fn advisory_hits(ctx: &AuditContext) -> Vec<LanguageFinding> {
@@ -76,11 +105,15 @@ fn excluded(file: &FileInfo) -> bool {
 }
 
 fn is_vite_config(file: &FileInfo) -> bool {
-    let lower = file.rel_path.to_ascii_lowercase();
-    lower.ends_with("vite.config.ts")
-        || lower.ends_with("vite.config.js")
-        || lower.ends_with("vite.config.mts")
-        || lower.ends_with("vite.config.cts")
+    matches!(
+        file.name.to_ascii_lowercase().as_str(),
+        "vite.config.ts"
+            | "vite.config.js"
+            | "vite.config.mts"
+            | "vite.config.cts"
+            | "vite.config.mjs"
+            | "vite.config.cjs"
+    )
 }
 
 fn is_env_or_client_source(file: &FileInfo) -> bool {
@@ -162,43 +195,6 @@ fn is_script_or_html(lower_path: &str) -> bool {
         || lower_path.ends_with(".html")
 }
 
-fn vite_config_hits(file: &FileInfo) -> Vec<LanguageFinding> {
-    let mut out = Vec::new();
-    for (idx, raw_line) in file.text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = strip_comments_for_line_language(raw_line, "ts");
-        let lower = line.to_ascii_lowercase();
-        if lower.is_empty() || nearby_allow(&file.text, line_no, "websec.vite.public-dev-server") {
-            continue;
-        }
-        let compact = lower.split_whitespace().collect::<String>();
-        let broad_allowed_hosts = compact.contains("allowedhosts:true");
-        let broad_host = compact.contains("host:true")
-            || lower.contains("host: \"0.0.0.0\"")
-            || lower.contains("host: '0.0.0.0'")
-            || lower.contains("host: `0.0.0.0`")
-            || lower.contains("host: \"::\"")
-            || lower.contains("host: '::'")
-            || lower.contains("host: `::`");
-        let broad_cors = compact.contains("cors:true");
-        let loose_fs =
-            compact.contains("strict:false") && nearby_text(file, line_no, 3).contains("fs");
-        if broad_allowed_hosts || broad_host || broad_cors || loose_fs {
-            out.push(finding(
-                HLT_RULE_ID,
-                "websec.vite.public-dev-server",
-                file,
-                line_no,
-                "Vite dev or preview server is configured with broad network exposure",
-                "Vite dev-server exposure can disclose source or enable host-header and CORS abuse",
-                "bind Vite to localhost, use explicit allowedHosts and origins, and keep server.fs.strict enabled",
-                ProofWindow::None,
-            ));
-        }
-    }
-    out
-}
-
 fn vite_env_secret_hits(file: &FileInfo) -> Vec<LanguageFinding> {
     let mut out = Vec::new();
     let kind = if is_env_file(file) { "shell" } else { "ts" };
@@ -248,45 +244,6 @@ fn vite_env_name_is_secret(name: &str) -> bool {
         && !["public", "publishable", "anon", "mapbox"]
             .iter()
             .any(|needle| lower.contains(needle))
-}
-
-fn browser_storage_hits(file: &FileInfo) -> Vec<LanguageFinding> {
-    let mut out = Vec::new();
-    for (idx, raw_line) in file.text.lines().enumerate() {
-        let line_no = idx + 1;
-        let line = strip_comments_for_line_language(raw_line, "ts");
-        let lower = line.to_ascii_lowercase();
-        if lower.is_empty() || nearby_allow(&file.text, line_no, "websec.storage.token") {
-            continue;
-        }
-        let storage = lower.contains("localstorage") || lower.contains("sessionstorage");
-        let sensitive = [
-            "token",
-            "jwt",
-            "access_token",
-            "refresh_token",
-            "session",
-            "secret",
-            "password",
-            "authorization",
-        ]
-        .iter()
-        .any(|needle| lower.contains(needle));
-        let removal_only = lower.contains(".removeitem(") || lower.contains(".clear(");
-        if storage && sensitive && !removal_only {
-            out.push(finding(
-                HLT_RULE_ID,
-                "websec.storage.token",
-                file,
-                line_no,
-                "sensitive token or session material is stored in browser-accessible storage",
-                "localStorage and sessionStorage are readable by injected JavaScript",
-                "prefer HttpOnly Secure SameSite cookies or a bounded in-memory token flow with documented threat model",
-                ProofWindow::None,
-            ));
-        }
-    }
-    out
 }
 
 fn credentialed_wildcard_cors_hits(file: &FileInfo) -> Vec<LanguageFinding> {

@@ -23,8 +23,7 @@ static HARD_DISABLED_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 static CONTRACT_VERSION_BASENAME_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|[_\-.])v([0-9]+)$")
-        .expect("contract basename version regex is valid")
+    Regex::new(r"(?i)(?:^|[_\-.])v([0-9]+)$").expect("contract basename version regex is valid")
 });
 
 #[derive(Debug, Clone, Copy, Default)]

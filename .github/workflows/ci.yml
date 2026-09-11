@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   quality:
+    name: quality
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -45,6 +46,10 @@ jobs:
           if-no-files-found: error
   required:
     name: jankurai-tools-analyzers/required
+    permissions:
+      contents: read
+      actions: read
+      checks: read
     needs: quality
     if: always()
     runs-on: ubuntu-24.04
@@ -57,9 +62,11 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: bash ops/ci/aggregate.sh
+      - run: bash ops/ci/aggregate.sh --hosted
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   publish-ci-tag:
     needs: required
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
